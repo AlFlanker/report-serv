@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, join } from 'node:path';
 
 export const JAVA_MAJOR = 25;
-export const JDK_IMAGE = 'maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976';
-export const JDK_DIRECTORY = 'temurin-jdk-25-93b8a14ea2f4';
+export const JDK_IMAGE = 'eclipse-temurin@sha256:5ba254809ef542504d40d47271c7d6c4f240fe40ca1386259806d431f13b6b4f';
+export const JDK_DIRECTORY = 'temurin-jdk-25-5ba254809ef5';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const defaultCache = join(root, '.cache', 'maven');
+const defaultCache = join(root, '.cache', 'java');
 
 /** Require both a Java 25 runtime and the complete matching compiler. */
 export function isJdk25(home) {
@@ -42,14 +42,14 @@ async function installPinnedJdk(home) {
       // A concurrent build may have published the same immutable JDK first.
       if (!['EEXIST', 'ENOTEMPTY'].includes(error.code) || !isJdk25(home)) throw error;
     }
-    console.log('Installed verified Temurin JDK 25 in .cache/maven.');
+    console.log('Installed verified Temurin JDK 25 in .cache/java.');
   } finally {
     spawnSync('docker', ['rm', '-f', container], { stdio: 'ignore' });
     await rm(temporary, { recursive: true, force: true });
   }
 }
 
-/** Shared by Maven and the local API so their Java major versions cannot diverge. */
+/** Shared by Gradle and the local API so their Java major versions cannot diverge. */
 export async function resolveJavaHome({ env = process.env, cacheDirectory = defaultCache, install = installPinnedJdk } = {}) {
   if (isJdk25(env.JAVA_HOME)) return realpath(env.JAVA_HOME);
   const seen = new Set();
