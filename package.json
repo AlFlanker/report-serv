@@ -15,6 +15,7 @@
     "start:prod": "node --env-file-if-exists=.env scripts/java-api.mjs",
     "build:api": "node scripts/maven.mjs -DskipTests package",
     "test": "node --env-file-if-exists=.env scripts/maven.mjs test",
+    "test:toolchain": "node --test scripts/java-home.test.mjs",
     "test:e2e": "node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test",
     "test:s3": "node --env-file-if-exists=.env scripts/maven.mjs -Dtest=BatchIntegrationTest test",
     "test:migration": "node --env-file-if-exists=.env --test scripts/legacy/migration.test.mjs",

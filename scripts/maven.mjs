@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { javaEnvironment, resolveJavaHome } from './java-home.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const version = '3.9.16';
@@ -18,43 +19,7 @@ function checked(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} failed with status ${result.status}`);
 }
 
-function isJdk21(home) {
-  if (!home || !existsSync(join(home, 'bin', 'javac')) || !existsSync(join(home, 'lib', 'ct.sym'))) return false;
-  const result = spawnSync(join(home, 'bin', 'javac'), ['-version'], { encoding: 'utf8' });
-  return result.status === 0 && /^javac 21(?:\.|\s)/.test(result.stdout.trim());
-}
-let javaHome = process.env.JAVA_HOME;
-if (!isJdk21(javaHome)) {
-  const candidate = spawnSync('sh', ['-c', 'command -v javac || command -v java'], { encoding: 'utf8' });
-  if (candidate.status === 0 && candidate.stdout.trim()) {
-    javaHome = dirname(dirname(await realpath(candidate.stdout.trim())));
-  }
-}
-if (!isJdk21(javaHome)) {
-  // The cloud machine can provide a Java 21 runtime without the compiler.
-  // Reuse a digest-verified official Maven image as the JDK distribution.
-  javaHome = join(cache, 'temurin-jdk-21.0.12.1');
-  if (!isJdk21(javaHome)) {
-    const image = 'maven@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320';
-    const name = `report-serv-jdk-${process.pid}`;
-    const temporary = `${javaHome}.${process.pid}`;
-    checked('docker', ['pull', image]);
-    try {
-      checked('docker', ['create', '--name', name, image]);
-      checked('docker', ['cp', `${name}:/opt/java/openjdk`, temporary]);
-      if (!isJdk21(temporary)) throw new Error('The verified Java image did not contain a complete JDK 21');
-      // Another concurrent build may have installed the same immutable JDK.
-      if (!isJdk21(javaHome)) {
-        try { await rename(temporary, javaHome); }
-        catch (error) { if (!isJdk21(javaHome)) throw error; }
-      }
-      console.log('Installed verified Temurin JDK 21 in .cache/maven.');
-    } finally {
-      spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
-      await rm(temporary, { recursive: true, force: true });
-    }
-  }
-}
+const javaHome = await resolveJavaHome();
 
 if (!existsSync(executable)) {
   const archive = join(cache, `apache-maven-${version}-bin.tar.gz`);
@@ -94,19 +59,20 @@ await writeFile(settings, `<settings xmlns="http://maven.apache.org/SETTINGS/1.2
 let javaOptions = process.env.MAVEN_OPTS || '';
 const certificate = process.env.BUILD_CA_CERT || process.env.CODEX_PROXY_CERT;
 if (certificate) {
-  const fingerprint = createHash('sha256').update(await readFile(certificate)).digest('hex').slice(0,16);
+  const fingerprint = createHash('sha256').update(await readFile(certificate))
+    .update(await readFile(join(javaHome, 'lib', 'security', 'cacerts'))).digest('hex').slice(0,16);
   const truststore = join(cache, `cacerts-${fingerprint}`);
   if (!existsSync(truststore)) {
     // Keep Java's default roots, adding only the configured corporate/cloud CA.
     const defaultTrust = join(javaHome, 'lib', 'security', 'cacerts');
     await copyFile(defaultTrust, truststore);
-    checked('keytool', ['-importcert', '-noprompt', '-alias', `report-serv-proxy-${fingerprint}`, '-file', certificate, '-keystore', truststore, '-storepass', 'changeit']);
+    checked(join(javaHome, 'bin', 'keytool'), ['-importcert', '-noprompt', '-alias', `report-serv-proxy-${fingerprint}`, '-file', certificate, '-keystore', truststore, '-storepass', 'changeit']);
   }
   javaOptions += ` -Djavax.net.ssl.trustStore=${truststore} -Djavax.net.ssl.trustStorePassword=changeit`;
 }
 
 const child = spawn(executable, ['--batch-mode', '--no-transfer-progress', '-s', settings, `-Dmaven.repo.local=${join(cache, 'repository')}`, '-f', join(root, 'backend', 'pom.xml'), ...process.argv.slice(2)], {
-  cwd: root, stdio: 'inherit', env: { ...process.env, JAVA_HOME: javaHome, PATH: `${join(javaHome, 'bin')}:${process.env.PATH || ''}`, MAVEN_OPTS: javaOptions },
+  cwd: root, stdio: 'inherit', env: { ...javaEnvironment(javaHome), MAVEN_OPTS: javaOptions },
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => child.kill(signal));
 child.once('error', async error => { console.error(error.message); await rm(settings, { force: true }); process.exitCode = 1; });

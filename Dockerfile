@@ -20,10 +20,10 @@ COPY --chown=node:node scripts/init-s3.mjs ./scripts/init-s3.mjs
 USER node
 CMD ["node", "scripts/init-s3.mjs"]
 
-FROM maven:3.9.16-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320 AS api-dependencies
+FROM maven:3.9.16-eclipse-temurin-25@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976 AS api-dependencies
 WORKDIR /app
 COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
-COPY scripts/maven.mjs ./scripts/maven.mjs
+COPY scripts/maven.mjs scripts/java-home.mjs ./scripts/
 COPY backend/pom.xml ./backend/pom.xml
 ENV MAVEN_EXECUTABLE=/usr/bin/mvn
 RUN --mount=type=cache,target=/app/.cache/maven --mount=type=secret,id=proxy_ca \
@@ -37,9 +37,11 @@ RUN --mount=type=cache,target=/app/.cache/maven --mount=type=secret,id=proxy_ca 
     if [ -f /run/secrets/proxy_ca ]; then export BUILD_CA_CERT=/run/secrets/proxy_ca; fi; \
     node scripts/maven.mjs -DskipTests package
 
-FROM eclipse-temurin:21-jre-jammy@sha256:dff6eb46527bd293a3c06bbbe9e64e8c9f91f01905b5abbdad31761c03059d2c AS runtime
+FROM eclipse-temurin:25-jre-jammy@sha256:a4e9fb35b48412cafbf036dabe201f22ee5e96f789e975bd6866ba0cbec45d17 AS runtime
 WORKDIR /app
-RUN groupadd --gid 10001 reports && useradd --uid 10001 --gid reports --no-create-home --shell /usr/sbin/nologin reports
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 reports && useradd --uid 10001 --gid reports --no-create-home --shell /usr/sbin/nologin reports
 COPY --from=api-build --chown=reports:reports /app/backend/target/report-serv.jar ./report-serv.jar
 ENV HOST=0.0.0.0 PORT=3001
 USER reports

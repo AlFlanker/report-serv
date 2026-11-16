@@ -1,16 +1,17 @@
 # Сервис формирования отчётов
 
-**Spring Boot 3.5.16 + Spring Batch 5.2.6**, Java 21, PostgreSQL 17, S3;
+**Spring Boot 3.5.16 + Spring Batch 5.2.6**, Java 25, PostgreSQL 17, S3;
 интерфейс — Angular 22 и **ng-zorro-antd** по предоставленным макетам.
 БД целевых систем заменены подготовленными JSON-ответами.
 
 ## Запуск
 
-Требуются Java **21**, Node.js **24.15+ в ветке 24**, npm, Docker Compose v2,
+Требуются Java **25**, Node.js **24.15+ в ветке 24**, npm, Docker Compose v2,
 `curl` и `tar`. Скрипт скачивает Maven **3.9.16** с Maven Central, проверяет
 SHA-512 и сохраняет его и зависимости в игнорируемой `.cache/maven`.
-Если установлен только JRE, полный JDK 21 извлекается из закреплённого Docker-образа
-в `.cache/maven` для компиляции. Проверка требует доступного Docker.
+Если полный JDK 25 отсутствует, он извлекается из закреплённого Docker-образа
+в `.cache/maven`. Скрипты сборки и локального запуска используют один JDK 25;
+системная Java другой версии не мешает запуску. Для загрузки JDK нужен Docker.
 
 ```bash
 npm ci
@@ -135,6 +136,7 @@ SEED_DEMO=false DATABASE_SCHEMA=empty_demo npm start
 ```bash
 npm run infra:up
 npm test               # Java: unit и интеграционные проверки PostgreSQL/S3/Batch
+npm run test:toolchain # выбор JDK 25 для сборки и локального запуска
 npm run test:s3        # интеграционные сценарии Batch с PostgreSQL и S3
 npm run test:e2e       # браузерные сценарии UI с Java backend
 npm run test:migration # отдельный инструмент импорта прежней SQLite
