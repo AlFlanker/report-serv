@@ -7,10 +7,10 @@
 ## Запуск
 
 Требуются Java **25**, Node.js **24.15+ в ветке 24**, npm, Docker Compose v2,
-`curl` и `tar`. Скрипт скачивает Maven **3.9.16** с Maven Central, проверяет
-SHA-512 и сохраняет его и зависимости в игнорируемой `.cache/maven`.
+`curl`. Сборка backend использует **Gradle Wrapper 9.9.1** с проверкой
+SHA-256 дистрибутива; Gradle и зависимости сохраняются в игнорируемой `.cache/gradle`.
 Если полный JDK 25 отсутствует, он извлекается из закреплённого Docker-образа
-в `.cache/maven`. Скрипты сборки и локального запуска используют один JDK 25;
+в `.cache/java`. Скрипты сборки и локального запуска используют один JDK 25;
 системная Java другой версии не мешает запуску. Для загрузки JDK нужен Docker.
 
 ```bash
@@ -26,10 +26,22 @@ Angular. `API_PORT` и `WEB_PORT` позволяют изменить порты
 
 ```bash
 npm run build          # Angular
-npm run build:api      # backend/target/report-serv.jar
+npm run build:api      # backend/build/libs/report-serv.jar
 npm run start:prod     # Java API + готовый UI на порту 3001
 npm run docker:up      # собрать и запустить весь сервис в Docker
 ```
+
+Конфигурация backend — `backend/build.gradle.kts`. Из корня проекта можно
+передавать задачи Gradle через скрипт, который выбирает JDK 25 и настраивает прокси:
+
+```bash
+node --env-file=.env scripts/gradle.mjs clean test bootJar
+```
+
+Для прямого запуска Wrapper выполните `cd backend` и `./gradlew bootJar`
+(`gradlew.bat bootJar` в Windows) с установленным JDK 25. Для тестов нужны
+переменные подключения PostgreSQL и S3; команды npm загружают их из `.env`.
+Результаты Java-тестов доступны в `backend/build/reports/tests/test/index.html`.
 
 Docker запускает PostgreSQL → S3 и инициализацию бакета → Java-приложение.
 UI включается в JAR, доступен на порту **3001**. Перед запуском освободите этот
@@ -42,10 +54,9 @@ UI включается в JAR, доступен на порту **3001**. Пе�
 SQLite и не используется приложением. PostgreSQL и S3 публикуются только на
 loopback: порты **5432** и **9000**.
 
-В среде с прокси Maven и Docker используют `BUILD_CA_CERT` или `CODEX_PROXY_CERT`
+В среде с прокси Gradle и Docker используют `BUILD_CA_CERT` или `CODEX_PROXY_CERT`
 с проверкой TLS. Docker получает сертификат через BuildKit secret; `.env` и
-секреты исключены из образов и Git. `MAVEN_EXECUTABLE` позволяет использовать
-установленный Maven вместо загрузки дистрибутива.
+секреты исключены из образов и Git. Установка Gradle в систему не требуется.
 Compose добавляет `s3` и `postgres` в `NO_PROXY`/`no_proxy`, чтобы Java обращалась к локальным сервисам напрямую.
 
 ## Задания и Spring Batch

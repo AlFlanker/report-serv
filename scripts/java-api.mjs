@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { javaEnvironment, resolveJavaHome } from './java-home.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const jar = join(root, 'backend', 'target', 'report-serv.jar');
+const jar = join(root, 'backend', 'build', 'libs', 'report-serv.jar');
 let child;
 let stopping = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
@@ -25,7 +25,7 @@ try {
   const javaHome = await resolveJavaHome();
   const env = javaEnvironment(javaHome);
   if (!process.argv.includes('--no-build')) {
-    const status = await run(process.execPath, ['scripts/maven.mjs', '-DskipTests', 'package'], env);
+    const status = await run(process.execPath, ['scripts/gradle.mjs', 'bootJar'], env);
     if (status !== 0) process.exitCode = status;
   }
   if (!stopping && !process.exitCode) {

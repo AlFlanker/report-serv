@@ -1,5 +1,7 @@
 node_modules/
 backend/target/
+backend/build/
+.gradle/
 dist/
 .angular/
 .cache/
