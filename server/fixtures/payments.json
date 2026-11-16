@@ -1,0 +1,17 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата документа", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "number", "title": "Номер документа", "type": "string", "width": 22 },
+    { "key": "recipient", "title": "Получатель", "type": "string", "width": 38 },
+    { "key": "amount", "title": "Сумма, руб.", "type": "number", "width": 22 },
+    { "key": "status", "title": "Статус документа", "type": "string", "width": 22 }
+  ],
+  "rows": [
+    { "date": "2026-11-03", "department": "6000", "number": "ПП-1103-01", "recipient": "ООО «Демо Связь»", "amount": 18500.75, "status": "Исполнен" },
+    { "date": "2026-11-05", "department": "6000", "number": "ПП-1105-02", "recipient": "ООО «Демо Оборудование»", "amount": 240000, "status": "Исполнен" },
+    { "date": "2026-11-12", "department": "6000", "number": "ПП-1112-03", "recipient": "ООО «Демо Обслуживание»", "amount": 15000, "status": "Принят" },
+    { "date": "2026-11-15", "department": "6000", "number": "ПП-1115-04", "recipient": "АО «Демо Энергия»", "amount": 42680.25, "status": "Исполнен" },
+    { "date": "2026-11-12", "department": "6001", "number": "ПП-1112-05", "recipient": "ООО «Демо Аренда»", "amount": 95000, "status": "Исполнен" }
+  ]
+}

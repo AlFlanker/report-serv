@@ -1,0 +1,17 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата принятия", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "number", "title": "Обязательство", "type": "string", "width": 22 },
+    { "key": "subject", "title": "Предмет обязательства", "type": "string", "width": 42 },
+    { "key": "accepted", "title": "Принято, руб.", "type": "number", "width": 22 },
+    { "key": "executed", "title": "Исполнено, руб.", "type": "number", "width": 22 }
+  ],
+  "rows": [
+    { "date": "2026-11-01", "department": "6000", "number": "БО-2026-001", "subject": "Поставка оборудования", "accepted": 240000, "executed": 240000 },
+    { "date": "2026-11-03", "department": "6000", "number": "БО-2026-002", "subject": "Услуги связи", "accepted": 55502.25, "executed": 18500.75 },
+    { "date": "2026-11-08", "department": "6000", "number": "БО-2026-003", "subject": "Техническое обслуживание", "accepted": 180000, "executed": 0 },
+    { "date": "2026-11-15", "department": "6000", "number": "БО-2026-004", "subject": "Коммунальные услуги", "accepted": 128040.75, "executed": 42680.25 },
+    { "date": "2026-11-02", "department": "6001", "number": "БО-2026-005", "subject": "Аренда помещений", "accepted": 285000, "executed": 95000 }
+  ]
+}

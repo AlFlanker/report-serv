@@ -1,0 +1,17 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата среза", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "account", "title": "Лицевой счёт", "type": "string", "width": 22 },
+    { "key": "purpose", "title": "Назначение счёта", "type": "string", "width": 38 },
+    { "key": "balance", "title": "Остаток, руб.", "type": "number", "width": 22 }
+  ],
+  "rows": [
+    { "date": "2026-10-31", "department": "6000", "account": "03210001234", "purpose": "Бюджетная деятельность", "balance": 2668567.20 },
+    { "date": "2026-10-31", "department": "6000", "account": "03210005678", "purpose": "Приносящая доход деятельность", "balance": 380000 },
+    { "date": "2026-11-15", "department": "6000", "account": "03210001234", "purpose": "Бюджетная деятельность", "balance": 3629886.70 },
+    { "date": "2026-11-15", "department": "6000", "account": "03210005678", "purpose": "Приносящая доход деятельность", "balance": 392500.50 },
+    { "date": "2026-10-31", "department": "6001", "account": "03210009876", "purpose": "Бюджетная деятельность", "balance": 500000 },
+    { "date": "2026-11-15", "department": "6001", "account": "03210009876", "purpose": "Бюджетная деятельность", "balance": 855000 }
+  ]
+}

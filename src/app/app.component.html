@@ -1,0 +1,159 @@
+<header class="topbar">
+  <nav aria-label="Хлебные крошки"><span>Личный кабинет</span><span aria-hidden="true">/</span><span>ПУР05</span><span aria-hidden="true">/</span><span aria-current="page">Формирование отчетов</span></nav>
+  <span class="timezone">Часовой пояс: МСК</span>
+</header>
+<main class="page">
+  <div class="page-heading">
+    <div><h1>Формирование отчетов</h1><p>Запускайте отчеты и скачивайте результаты в Excel.</p></div>
+    <button nz-button nzType="primary" class="new-report" data-testid="new-report" [disabled]="!catalog()" (click)="openCreate()">Новый отчет</button>
+  </div>
+  <div class="section-bar">
+    <h2 class="active-tab">Мои задания @if (allCount() > 0) { <span class="count">{{ allCount() }}</span> }</h2>
+    @if (allCount() > 0) {
+      <div class="refresh-area"><span class="secondary">Обновлено в {{ time(updatedAt()) }}</span><button nz-button [nzLoading]="refreshing()" (click)="refresh()">Обновить</button></div>
+    }
+  </div>
+  @if (loadError()) {
+    <div class="load-error" role="alert"><nz-alert nzType="error" [nzMessage]="loadError()" nzShowIcon /><button nz-button (click)="catalog() ? refresh() : loadCatalog()">Повторить</button></div>
+  }
+  @if (loading()) {
+    <div class="initial-loading"><nz-spin nzSimple nzSize="large" /><p>Загружаем задания…</p></div>
+  } @else if (!loadError() && allCount() === 0) {
+    <section class="empty-state" data-testid="empty-state">
+      <div class="empty-illustration"><nz-icon nzType="file-text" /><span class="empty-plus"><nz-icon nzType="plus" /></span></div>
+      <h2>У вас пока нет заданий</h2>
+      <p>Выберите отчет, укажите параметры и запустите формирование.<br>Когда файл будет готов, в ЛК придет уведомление.</p>
+      <button nz-button nzType="primary" (click)="openCreate()">Новый отчет</button>
+      <p class="empty-caption">Здесь будут доступны ваши задания и готовые Excel-файлы.</p>
+    </section>
+  } @else if (catalog() && allCount() > 0) {
+    <div class="info-strip"><nz-icon nzType="info-circle" /><span>Вы можете закрыть вкладку — выполнение продолжится. О готовности сообщим в ЛК.</span></div>
+    <div class="filters" aria-label="Фильтры заданий">
+      <nz-input-wrapper class="search-field"><nz-icon nzInputSuffix nzType="search" />
+        <input nz-input data-testid="report-search" aria-label="Найти отчет или номер задания" placeholder="Найти отчет или номер задания" [(ngModel)]="search" (ngModelChange)="searchChanged()" />
+      </nz-input-wrapper>
+      <label class="visually-hidden" for="status-filter-input">Статус задания</label>
+      <nz-select nzId="status-filter-input" data-testid="status-filter" aria-label="Статус задания" [(ngModel)]="status" (ngModelChange)="filtersChanged()" class="status-filter">
+        <nz-option nzValue="" nzLabel="Все статусы" /><nz-option nzValue="queued" nzLabel="В очереди" /><nz-option nzValue="running" nzLabel="Выполняется" /><nz-option nzValue="completed" nzLabel="Завершено" /><nz-option nzValue="failed" nzLabel="Ошибка" />
+      </nz-select>
+      <label class="visually-hidden" for="created-filter-input">Дата создания задания</label>
+      <nz-select nzId="created-filter-input" data-testid="created-filter" aria-label="Дата создания задания" [(ngModel)]="createdWindow" (ngModelChange)="filtersChanged()" nzSuffixIcon="calendar" class="created-filter">
+        <nz-option nzValue="7" nzLabel="Создано: за последние 7 дней" /><nz-option nzValue="30" nzLabel="Создано: за последние 30 дней" /><nz-option nzValue="all" nzLabel="Создано: за всё время" /><nz-option nzValue="custom" nzLabel="Создано: выбрать период" />
+      </nz-select>
+      @if (createdWindow === 'custom') { <nz-range-picker aria-label="Период создания" nzFormat="dd.MM.yyyy" [(ngModel)]="createdRange" (ngModelChange)="filtersChanged()" /> }
+    </div>
+    <nz-table data-testid="jobs-table" class="jobs-table" [nzData]="jobs()" [nzFrontPagination]="false" [nzShowPagination]="false" [nzLoading]="refreshing()" [nzNoResult]="noMatches" [nzScroll]="{ x: '1120px' }">
+      <thead><tr>
+        <th nzWidth="23%">Отчет</th><th nzWidth="20%">Параметры</th>
+        <th nzWidth="12%" [attr.aria-sort]="sort === 'desc' ? 'descending' : 'ascending'"><button class="sort-button" (click)="toggleSort()" aria-label="Изменить сортировку по дате создания">Создано <nz-icon [nzType]="sort === 'desc' ? 'arrow-down' : 'arrow-up'" /></button></th>
+        <th nzWidth="14%">Статус</th><th nzWidth="19%">Результат</th><th nzWidth="12%"><span class="visually-hidden">Действия</span></th>
+      </tr></thead>
+      <tbody>@for (job of jobs(); track job.id; let rowIndex = $index) {
+        <tr [attr.data-testid]="'job-row-' + job.id" [class.new-job]="highlightedId() === job.id" [class.striped-row]="rowIndex % 2 === 1">
+          <td><button class="report-link" (click)="openDetails(job)">{{ job.reportName }}</button><span class="job-id secondary">№ {{ job.id }}</span></td>
+          <td><div class="period">{{ period(job) }}</div><div class="secondary cell-subline">@if (job.parameters.account) { ЛС {{ job.parameters.account }} · {{ job.parameters.department }} } @else { Подразделение {{ job.parameters.department }} }</div></td>
+          <td><div>{{ date(job.createdAt) }}</div><div class="secondary cell-subline">{{ time(job.createdAt) }}</div></td>
+          <td><app-status-badge [status]="job.status" />@if (job.status === 'queued' || job.status === 'running') { <div class="secondary stage">{{ job.stage }}</div> }</td>
+          <td>
+            @if (job.status === 'completed' && job.result) {
+              @if (expired(job)) { <span class="secondary">Срок хранения истек</span> } @else {
+                <button nz-button class="download-button" [attr.data-testid]="'job-download-' + job.id" [nzLoading]="downloadingId() === job.id" (click)="download(job)"><nz-icon nzType="download" /> Скачать Excel</button>
+                <div class="secondary result-caption">До {{ dateTime(job.expiresAt) }} · {{ fileSize(job.result.sizeBytes) }}</div>
+              }
+            } @else { <span class="secondary">{{ job.status === 'failed' ? 'Файл не создан' : job.status === 'running' ? 'Формируется' : 'После завершения' }}</span> }
+          </td>
+          <td><button [attr.data-testid]="'job-details-' + job.id" class="details-link" (click)="openDetails(job)"><span>{{ highlightedId() === job.id ? 'Открыть задание' : 'Подробнее' }}</span><nz-icon nzType="right" /></button></td>
+        </tr>
+      }</tbody>
+    </nz-table>
+    <ng-template #noMatches><div class="no-matches" data-testid="no-matches"><h3>Задания не найдены</h3><p>Попробуйте изменить запрос или фильтры.</p><button nz-button (click)="clearFilters()">Сбросить фильтры</button></div></ng-template>
+    <footer class="table-footer"><span class="secondary">Показано {{ jobs().length }} из {{ total() }} заданий</span><div class="pagination-controls"><label class="visually-hidden" for="page-size-input">Заданий на странице</label><nz-select nzId="page-size-input" aria-label="Заданий на странице" [ngModel]="pageSize" (ngModelChange)="pageSizeChanged($event)"><nz-option [nzValue]="10" nzLabel="10 на странице" /><nz-option [nzValue]="20" nzLabel="20 на странице" /><nz-option [nzValue]="50" nzLabel="50 на странице" /></nz-select><nz-pagination [nzPageIndex]="page" [nzPageSize]="pageSize" [nzTotal]="total()" (nzPageIndexChange)="pageChanged($event)" /></div></footer>
+  }
+</main>
+
+<nz-modal [nzVisible]="modalOpen()" nzTitle="Новый отчет" [nzWidth]="900" [nzFooter]="wizardFooter" nzClassName="report-modal" [nzMaskClosable]="false" [nzClosable]="!saving()" (nzOnCancel)="closeCreate()">
+  <ng-container *nzModalContent>
+    <ol class="wizard-steps" aria-label="Шаги создания отчёта"><li [class.current]="step() === 1" [attr.aria-current]="step() === 1 ? 'step' : null">@if (step() === 2) { <nz-icon nzType="check" /> } @else { 1 } <span>Выбор отчета</span></li><li [class.current]="step() === 2" [attr.aria-current]="step() === 2 ? 'step' : null">2 <span>Параметры и запуск</span></li></ol>
+    @if (step() === 1) {
+      <section class="catalog-step">
+        <nz-input-wrapper><nz-icon nzInputSuffix nzType="search" /><input nz-input aria-label="Найти отчет по названию" placeholder="Найти отчет по названию" [ngModel]="reportSearch()" (ngModelChange)="reportSearch.set($event)" /></nz-input-wrapper>
+        <p class="catalog-caption secondary">Доступные отчеты · ПУР05</p>
+        <div class="report-choices" role="radiogroup" aria-label="Доступные отчёты">@for (report of filteredReports(); track report.id) {
+          <label class="report-choice" [class.selected]="selectedReport()?.id === report.id" [attr.data-testid]="'report-choice-' + report.id">
+            <nz-icon nzType="file-text" /><span class="report-choice-copy"><span class="choice-title">{{ report.name }}</span><span class="secondary">{{ report.description }}</span></span>
+            <span class="schedule" [class.night]="report.nightOnly">{{ report.nightOnly ? 'Ночной запуск' : 'В любое время' }}</span>
+            <input type="radio" name="report" [value]="report.id" [checked]="selectedReport()?.id === report.id" (change)="selectReport(report)" [attr.aria-label]="report.name" />
+          </label>
+        } @empty { <div class="no-matches"><h3>Отчёты не найдены</h3><p>Измените поисковый запрос.</p></div> }</div>
+      </section>
+    } @else if (selectedReport(); as report) {
+      <section class="parameters-step">
+        <button class="back-link" data-testid="modal-back" (click)="backToReports()" [disabled]="saving()"><nz-icon nzType="left" /> Выбрать другой отчет</button>
+        <h2>{{ report.name }}</h2><p class="report-description secondary">{{ report.description }}</p>
+        <h3>Параметры отчета</h3>
+        <div class="parameter-fields">
+          @if (report.parameterType === 'period') {
+            <div class="date-grid">
+              <div class="form-field"><label for="start-date-input">Дата начала <span aria-hidden="true">*</span></label><nz-date-picker data-testid="start-date" nzId="start-date-input" nzFormat="dd.MM.yyyy" nzPlaceHolder="ДД.ММ.ГГГГ" [ngModel]="startDate" (ngModelChange)="dateChanged('startDate', $event)" (input)="captureDate('startDate', $event)" (focusout)="commitDate('startDate')" [nzDisabled]="saving()" /></div>
+              <div class="form-field"><label for="end-date-input">Дата окончания <span aria-hidden="true">*</span></label><nz-date-picker data-testid="end-date" nzId="end-date-input" nzFormat="dd.MM.yyyy" nzPlaceHolder="ДД.ММ.ГГГГ" [ngModel]="endDate" (ngModelChange)="dateChanged('endDate', $event)" (input)="captureDate('endDate', $event)" (focusout)="commitDate('endDate')" [nzDisabled]="saving()" /></div>
+            </div>
+            <p class="field-help secondary">Не более {{ catalog()?.config?.maxPeriodDays ?? 31 }} календарного дня включительно.</p>
+          } @else {
+            <div class="form-field"><label for="as-of-date-input">Дата отчета <span aria-hidden="true">*</span></label><nz-date-picker data-testid="as-of-date" nzId="as-of-date-input" nzFormat="dd.MM.yyyy" nzPlaceHolder="ДД.ММ.ГГГГ" [ngModel]="asOfDate" (ngModelChange)="dateChanged('asOfDate', $event)" (input)="captureDate('asOfDate', $event)" (focusout)="commitDate('asOfDate')" [nzDisabled]="saving()" /></div>
+          }
+          <div class="form-field department-field"><label for="department-input">Подразделение <span aria-hidden="true">*</span></label><nz-select data-testid="department-select" nzId="department-input" [(ngModel)]="department" nzPlaceHolder="Выберите подразделение" [nzDisabled]="saving()">@for (dep of catalog()?.departments; track dep.id) { <nz-option [nzValue]="dep.id" [nzLabel]="dep.id + ' — ' + dep.name" /> }</nz-select></div>
+          @if (report.requiresAccount) { <div class="form-field account-field"><label for="account-input">Лицевой счет <span aria-hidden="true">*</span></label><input nz-input id="account-input" data-testid="account-input" placeholder="Например, 03210001234" inputmode="numeric" maxlength="11" [(ngModel)]="account" [disabled]="saving()" /></div> }
+        </div>
+        @if (showValidation() && validationError()) { <div class="form-error" role="alert"><nz-alert nzType="error" [nzMessage]="validationError()" nzShowIcon /></div> }
+        @if (submitError()) { <div class="form-error" role="alert"><nz-alert nzType="error" [nzMessage]="submitError()" nzShowIcon /></div> }
+        @if (report.nightOnly) { <div class="night-notice"><nz-icon nzType="moon" /><p>Запуск с 00:00 до 06:00 МСК. Ближайшее окно — {{ windowLabel(catalog()?.nextNightWindow) }}.<br>Точное время начала зависит от очереди.</p></div> }
+        <div class="background-notice secondary"><nz-icon nzType="bell" /><p>После запуска можно закрыть вкладку. Задание сохранится,<br class="desktop-break"> о готовности отчета сообщим в ЛК.</p></div>
+      </section>
+    }
+  </ng-container>
+</nz-modal>
+<ng-template #wizardFooter>
+  <div class="wizard-footer">
+    @if (step() === 1) { <span class="secondary footer-hint">Выберите отчет, чтобы задать параметры.</span> } @else { <button nz-button [disabled]="saving()" (click)="backToReports()">Назад</button> }
+    <div class="footer-actions"><button nz-button [disabled]="saving()" (click)="closeCreate()">Отмена</button>@if (step() === 1) { <button nz-button nzType="primary" data-testid="next-step" [disabled]="!selectedReport()" (click)="nextStep()">Далее</button> } @else { <button nz-button nzType="primary" data-testid="start-report" [nzLoading]="saving()" (click)="submit()">Запустить формирование</button> }</div>
+  </div>
+</ng-template>
+
+<nz-drawer [nzVisible]="selectedJob() !== null" [nzWidth]="580" [nzTitle]="drawerTitle" [nzFooter]="drawerFooter" nzWrapClassName="report-drawer" (nzOnClose)="closeDetails()">
+  <ng-container *nzDrawerContent>
+    @if (selectedJob(); as job) {
+      <article class="job-details" data-testid="details-drawer">
+        <h2>{{ job.reportName }}</h2><div class="detail-status"><app-status-badge [status]="job.status" /></div>
+        @if (detailError()) { <nz-alert nzType="warning" [nzMessage]="detailError()" nzShowIcon /> }
+        @switch (job.status) {
+          @case ('completed') {
+            @if (expired(job)) {
+              <section class="state-panel state-expired"><h3><nz-icon nzType="clock-circle" /> Срок хранения файла истек</h3><p>Создайте новый отчет с нужными параметрами.</p></section>
+            } @else {
+              <section class="state-panel state-completed"><h3><nz-icon nzType="file-text" /> Отчет готов к скачиванию</h3><p class="secondary">Excel (.xlsx) · {{ fileSize(job.result?.sizeBytes) }} · {{ number(job.result?.rowCount ?? 0) }} строк</p><button nz-button nzType="primary" [nzLoading]="downloadingId() === job.id" (click)="download(job)">Скачать Excel</button></section>
+            }
+            <p class="expiry-caption secondary">Файл доступен до {{ longDateTime(job.expiresAt) }} МСК.</p>
+          }
+          @case ('queued') {
+            <section class="state-panel state-queued"><h3><nz-icon [nzType]="waitingForWindow(job) ? 'moon' : 'clock-circle'" /> {{ waitingForWindow(job) ? 'Ожидает разрешенного времени' : 'Ожидает выполнения' }}</h3>@if (waitingForWindow(job)) { <p>Ближайшее окно: {{ windowLabel(job.nextWindow) }}.</p> }<p class="secondary">Отчет начнет выполняться {{ waitingForWindow(job) ? 'в разрешенное время, ' : '' }}когда подойдет очередь. Повторный запуск не нужен.</p></section>
+          }
+          @case ('running') { <section class="state-panel state-running"><h3><nz-icon nzType="sync" /> Отчет формируется</h3><p>{{ job.stage }}</p><p class="secondary">Вы можете закрыть вкладку и вернуться позже. О готовности сообщим в ЛК.</p></section> }
+          @case ('failed') {
+            <section class="state-panel state-failed"><h3><nz-icon nzType="exclamation-circle" /> Не удалось сформировать отчет</h3><p>{{ job.error?.message || 'Не удалось обработать данные отчета. Файл не создан.' }}</p><p class="secondary">Обратитесь в поддержку и укажите номер задания.</p></section>
+            <button nz-button class="copy-support" (click)="copySupport(job)"><nz-icon [nzType]="supportCopied() ? 'check' : 'copy'" /> {{ supportCopied() ? 'Сведения скопированы' : 'Скопировать сведения' }}</button>
+          }
+        }
+        <section class="detail-section"><h3>Параметры</h3><dl><div class="parameter-period"><dt>{{ job.parameters.asOfDate ? 'Дата' : 'Период' }}</dt><dd>{{ period(job) }}</dd></div><div><dt>Подразделение</dt><dd>{{ departmentName(job.parameters.department) }}</dd></div>@if (job.parameters.account) { <div><dt>Лицевой счет</dt><dd>{{ job.parameters.account }}</dd></div> }</dl></section>
+        @if (job.status === 'queued') {
+          <section class="detail-section"><h3>Что дальше</h3><div class="timeline-item"><nz-icon nzType="clock-circle" /><div><h4>В очереди</h4><p class="secondary">Задание сохранено {{ dateTime(job.createdAt) }} МСК.</p></div></div><div class="timeline-item"><nz-icon nzType="bell" /><div><h4>Уведомим о готовности</h4><p class="secondary">Можно закрыть вкладку и вернуться позже.</p></div></div></section>
+        } @else if (job.status === 'failed') {
+          <section class="detail-section"><h3>Сведения для поддержки</h3><p class="secondary">№{{ job.id }} · {{ dateTime(job.error?.at ?? job.completedAt) }} МСК</p><p class="support-code">{{ job.error?.code }}</p></section>
+        } @else {
+          <section class="detail-section execution-section"><h3>Выполнение</h3><dl><div><dt>Создано</dt><dd>{{ dateTime(job.createdAt) }} МСК</dd></div>@if (job.startedAt) { <div><dt>Начато</dt><dd>{{ dateTime(job.startedAt) }} МСК</dd></div> }@if (job.completedAt) { <div><dt>Завершено</dt><dd>{{ dateTime(job.completedAt) }} МСК</dd></div> }</dl><p class="secondary execution-note">Параметры задания сохраняются вместе с результатом.</p></section>
+        }
+      </article>
+    }
+  </ng-container>
+</nz-drawer>
+<ng-template #drawerTitle><span>Задание №{{ selectedJob()?.id }}</span></ng-template>
+<ng-template #drawerFooter><div class="drawer-footer"><button nz-button (click)="closeDetails()">Закрыть</button></div></ng-template>
