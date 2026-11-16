@@ -1,0 +1,14 @@
+.git
+.data
+.env
+.env.*
+!.env.example
+node_modules
+backend/target
+.cache
+.angular
+dist
+test-results
+playwright-report
+coverage
+*.log

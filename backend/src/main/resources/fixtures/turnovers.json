@@ -1,0 +1,21 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата операции", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "account", "title": "Лицевой счёт", "type": "string", "width": 22 },
+    { "key": "document", "title": "Документ", "type": "string", "width": 22 },
+    { "key": "debit", "title": "Дебет, руб.", "type": "number", "width": 22 },
+    { "key": "credit", "title": "Кредит, руб.", "type": "number", "width": 22 }
+  ],
+  "rows": [
+    { "date": "2026-10-01", "department": "6000", "account": "03210001234", "document": "ПП-1001-01", "debit": 0, "credit": 3000000 },
+    { "date": "2026-10-07", "department": "6000", "account": "03210001234", "document": "ПП-1007-02", "debit": 275000, "credit": 0 },
+    { "date": "2026-10-14", "department": "6000", "account": "03210001234", "document": "ПП-1014-03", "debit": 15432.80, "credit": 0 },
+    { "date": "2026-10-22", "department": "6000", "account": "03210001234", "document": "ПП-1022-04", "debit": 0, "credit": 35000 },
+    { "date": "2026-10-31", "department": "6000", "account": "03210001234", "document": "ПП-1031-05", "debit": 81000, "credit": 0 },
+    { "date": "2026-11-05", "department": "6000", "account": "03210001234", "document": "ПП-1105-06", "debit": 240000, "credit": 0 },
+    { "date": "2026-11-15", "department": "6000", "account": "03210001234", "document": "ПП-1115-07", "debit": 42680.25, "credit": 0 },
+    { "date": "2026-10-15", "department": "6000", "account": "03210005678", "document": "ПП-1015-08", "debit": 120000, "credit": 0 },
+    { "date": "2026-10-12", "department": "6001", "account": "03210009876", "document": "ПП-1012-09", "debit": 0, "credit": 500000 }
+  ]
+}

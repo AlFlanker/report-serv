@@ -1,0 +1,25 @@
+server:
+  port: ${PORT:${API_PORT:3001}}
+  address: ${HOST:127.0.0.1}
+  shutdown: graceful
+spring:
+  application:
+    name: report-serv
+  batch:
+    job:
+      enabled: false
+    jdbc:
+      initialize-schema: never
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  task:
+    scheduling:
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
+logging:
+  level:
+    org.springframework.batch: INFO

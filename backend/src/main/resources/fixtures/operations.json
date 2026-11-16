@@ -1,0 +1,21 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата операции", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "document", "title": "Номер документа", "type": "string", "width": 22 },
+    { "key": "operation", "title": "Операция", "type": "string", "width": 36 },
+    { "key": "income", "title": "Поступление, руб.", "type": "number", "width": 22 },
+    { "key": "expense", "title": "Выбытие, руб.", "type": "number", "width": 22 }
+  ],
+  "rows": [
+    { "date": "2026-10-30", "department": "6000", "document": "ОП-1030-01", "operation": "Зачисление средств", "income": 850000, "expense": 0 },
+    { "date": "2026-11-01", "department": "6000", "document": "ОП-1101-01", "operation": "Зачисление бюджетных средств", "income": 1250000, "expense": 0 },
+    { "date": "2026-11-03", "department": "6000", "document": "ОП-1103-02", "operation": "Оплата услуг связи", "income": 0, "expense": 18500.75 },
+    { "date": "2026-11-05", "department": "6000", "document": "ОП-1105-03", "operation": "Оплата поставки оборудования", "income": 0, "expense": 240000 },
+    { "date": "2026-11-10", "department": "6000", "document": "ОП-1110-04", "operation": "Возврат остатка аванса", "income": 12500.50, "expense": 0 },
+    { "date": "2026-11-15", "department": "6000", "document": "ОП-1115-05", "operation": "Оплата коммунальных услуг", "income": 0, "expense": 42680.25 },
+    { "date": "2026-11-16", "department": "6000", "document": "ОП-1116-06", "operation": "Оплата обслуживания", "income": 0, "expense": 15000 },
+    { "date": "2026-11-04", "department": "6001", "document": "ОП-1104-07", "operation": "Зачисление бюджетных средств", "income": 450000, "expense": 0 },
+    { "date": "2026-11-12", "department": "6001", "document": "ОП-1112-08", "operation": "Оплата аренды", "income": 0, "expense": 95000 }
+  ]
+}

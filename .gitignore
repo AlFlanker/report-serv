@@ -1,0 +1,14 @@
+node_modules/
+backend/target/
+dist/
+.angular/
+.cache/
+coverage/
+*.log
+.DS_Store
+.data/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example

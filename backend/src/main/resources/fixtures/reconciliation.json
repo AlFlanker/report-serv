@@ -1,0 +1,18 @@
+{
+  "columns": [
+    { "key": "date", "title": "Дата поступления", "type": "date", "width": 18 },
+    { "key": "department", "title": "Подразделение", "type": "string", "width": 18 },
+    { "key": "payment", "title": "Платёж", "type": "string", "width": 22 },
+    { "key": "expected", "title": "Учтено, руб.", "type": "number", "width": 22 },
+    { "key": "received", "title": "Поступило, руб.", "type": "number", "width": 22 },
+    { "key": "difference", "title": "Расхождение, руб.", "type": "number", "width": 24 },
+    { "key": "status", "title": "Результат сверки", "type": "string", "width": 24 }
+  ],
+  "rows": [
+    { "date": "2026-11-01", "department": "6000", "payment": "ВХ-1101-01", "expected": 1250000, "received": 1250000, "difference": 0, "status": "Сопоставлено" },
+    { "date": "2026-11-06", "department": "6000", "payment": "ВХ-1106-02", "expected": 48000, "received": 47500, "difference": -500, "status": "Есть расхождение" },
+    { "date": "2026-11-10", "department": "6000", "payment": "ВХ-1110-03", "expected": 12500.50, "received": 12500.50, "difference": 0, "status": "Сопоставлено" },
+    { "date": "2026-11-14", "department": "6000", "payment": "ВХ-1114-04", "expected": 32000, "received": 0, "difference": -32000, "status": "Не поступило" },
+    { "date": "2026-11-04", "department": "6001", "payment": "ВХ-1104-05", "expected": 450000, "received": 450000, "difference": 0, "status": "Сопоставлено" }
+  ]
+}
