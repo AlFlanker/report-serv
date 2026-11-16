@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, stat, realpath } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pipeline } from 'node:stream/promises';
 import { createService } from './service.mjs';
 import { HttpError } from './domain.mjs';
 
@@ -39,6 +40,10 @@ export async function createApp(options = {}) {
       const url = new URL(request.url, 'http://localhost');
       const path = url.pathname;
       if (request.method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok' });
+      if (request.method === 'GET' && path === '/api/ready') {
+        try { return json(response, 200, await service.readiness()); }
+        catch { throw new HttpError(503, 'STORAGE_UNAVAILABLE', 'Хранилище отчетов временно недоступно.'); }
+      }
       if (request.method === 'GET' && path === '/api/catalog') return json(response, 200, service.catalog());
       if (request.method === 'GET' && path === '/api/jobs') return json(response, 200, service.listJobs(url.searchParams));
       if (request.method === 'POST' && path === '/api/jobs') return json(response, 201, service.createJob(await body(request)));
@@ -49,15 +54,28 @@ export async function createApp(options = {}) {
         const id = Number(jobRoute[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(400, 'INVALID_JOB_ID', 'Некорректный номер задания.');
         if (!jobRoute[2]) return json(response, 200, service.getJob(id));
-        const { file, fileName } = service.download(id);
-        response.writeHead(200, {
-          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'Content-Disposition': `attachment; filename="${fileName}"`,
-          'Content-Length': file.length,
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff',
-        });
-        return response.end(file);
+        const controller = new AbortController();
+        const stop = () => { if (!response.writableFinished) controller.abort(); };
+        request.once('aborted', stop);
+        response.once('close', stop);
+        try {
+          const { body: objectBody, fileName, contentLength } = await service.download(id, { signal: controller.signal });
+          response.writeHead(200, {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            ...(Number.isSafeInteger(contentLength) && contentLength >= 0 && { 'Content-Length': contentLength }),
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+          });
+          await pipeline(objectBody, response, { signal: controller.signal });
+          return;
+        } catch (error) {
+          if (controller.signal.aborted && response.destroyed) return;
+          throw error;
+        } finally {
+          request.off('aborted', stop);
+          response.off('close', stop);
+        }
       }
       if (path.startsWith('/api/')) throw new HttpError(404, 'NOT_FOUND', 'Ресурс не найден.');
       if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Метод не поддерживается.');
@@ -78,6 +96,10 @@ export async function createApp(options = {}) {
         throw new HttpError(404, 'NOT_FOUND', 'Ресурс не найден. Выполните npm run build для сборки интерфейса.');
       }
     } catch (error) {
+      if (response.headersSent || response.destroyed) {
+        response.destroy(error);
+        return;
+      }
       const status = error instanceof HttpError ? error.status : 500;
       if (status === 500) console.error('API request failed:', error.message);
       json(response, status, { error: { code: error instanceof HttpError ? error.code : 'INTERNAL_ERROR', message: error instanceof HttpError ? error.message : 'Внутренняя ошибка сервиса.', ...(error.fields && { fields: error.fields }) } });
@@ -97,7 +119,10 @@ export async function createApp(options = {}) {
       return server.address();
     },
     async close() {
-      if (server.listening) await new Promise((resolveClosed, reject) => server.close(error => error ? reject(error) : resolveClosed()));
+      if (server.listening) await new Promise((resolveClosed, reject) => {
+        server.close(error => error ? reject(error) : resolveClosed());
+        server.closeAllConnections();
+      });
       await service.close();
     },
   };

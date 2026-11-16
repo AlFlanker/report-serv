@@ -1,8 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { reports, departments, HttpError, validateCreate, nextNightWindow, inNightWindow, isoDate, moscowDate } from './domain.mjs';
-import { buildWorkbook } from './workbook.mjs';
+import { writeWorkbook } from './workbook.mjs';
+import { createS3Storage } from './s3-storage.mjs';
 
 const JOB_METADATA = 'id,report_id,parameters,status,stage,created_at,started_at,completed_at,expires_at,result_metadata,error_json,ready_at';
 
@@ -18,6 +22,8 @@ export async function createService(options = {}) {
   const maxPeriodDays = positiveInteger(options.maxPeriodDays ?? process.env['MAX_PERIOD_DAYS'], 31, 'MAX_PERIOD_DAYS');
   const retentionDays = positiveInteger(options.retentionDays ?? process.env['RETENTION_DAYS'], 7, 'RETENTION_DAYS');
   const processingDelayMs = options.processingDelayMs ?? 4000;
+  const storage = options.storage ?? createS3Storage();
+  const ownsStorage = !options.storage;
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`
@@ -36,9 +42,20 @@ export async function createService(options = {}) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL,
       title TEXT NOT NULL, created_at TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS object_cleanup (
+      object_key TEXT PRIMARY KEY, bucket TEXT NOT NULL,
+      reason TEXT NOT NULL, created_at TEXT NOT NULL
+    );
   `);
-  // A worker interrupted by shutdown is safe to repeat: all external reads are mocked,
-  // and file + final status + notification are committed in a single transaction.
+  const setting = key => db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value;
+  const remember = (key, value) => db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING').run(key, value);
+  remember('object_namespace', randomUUID());
+  remember('object_prefix', options.storagePrefix ?? storage.prefix ?? 'reports/');
+  const namespace = setting('object_namespace');
+  const prefix = setting('object_prefix').replace(/^\/+|\/+$/g, '');
+  const objectKey = (id, reportId) => `${prefix ? `${prefix}/` : ''}${namespace}/report-${id}-${reportId}.xlsx`;
+  // Recovered jobs reuse their object key. An upload intent remains durable until
+  // S3 completion and the job metadata/notification transaction both succeed.
   db.prepare("UPDATE jobs SET status='queued',stage='Ожидает запуска',ready_at=NULL WHERE status='running'").run();
 
   function present(row) {
@@ -51,10 +68,98 @@ export async function createService(options = {}) {
       ...(row.started_at && { startedAt: row.started_at }),
       ...(row.completed_at && { completedAt: row.completed_at }),
       ...(row.expires_at && { expiresAt: row.expires_at }),
-      ...(row.result_metadata && { result: JSON.parse(row.result_metadata) }),
+      ...(row.result_metadata && { result: publicResult(JSON.parse(row.result_metadata)) }),
       ...(row.error_json && { error: JSON.parse(row.error_json) }),
       ...(row.status === 'queued' && report.nightOnly && { nextWindow: nextNightWindow(now()) }),
     };
+  }
+
+  function publicResult(result) {
+    return { fileName: result.fileName, sizeBytes: result.sizeBytes, rowCount: result.rowCount };
+  }
+
+  function registerCleanup(key, reason = 'upload') {
+    db.prepare('INSERT INTO object_cleanup(object_key,bucket,reason,created_at) VALUES(?,?,?,?) ON CONFLICT(object_key) DO UPDATE SET reason=excluded.reason')
+      .run(key, storage.bucket, reason, now().toISOString());
+  }
+
+  async function cleanupObject(entry) {
+    if (entry.bucket !== storage.bucket) throw new Error('S3_BUCKET does not match the stored object bucket');
+    await storage.delete(entry.object_key);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (entry.reason === 'expired') {
+        for (const row of db.prepare("SELECT id,result_metadata FROM jobs WHERE status='completed' AND expires_at<=? AND result_metadata IS NOT NULL").all(now().toISOString())) {
+          const metadata = JSON.parse(row.result_metadata);
+          if (metadata.key === entry.object_key) {
+            metadata.objectDeletedAt = now().toISOString();
+            db.prepare('UPDATE jobs SET result_metadata=? WHERE id=?').run(JSON.stringify(metadata), row.id);
+          }
+        }
+      }
+      db.prepare('DELETE FROM object_cleanup WHERE object_key=?').run(entry.object_key);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+
+  async function cleanupPending() {
+    for (const entry of db.prepare('SELECT * FROM object_cleanup ORDER BY created_at LIMIT 20').all()) {
+      try { await cleanupObject(entry); }
+      catch { /* Retain the durable intent; retry on the next worker tick/restart. */ }
+    }
+  }
+
+  async function cleanExpired() {
+    for (const row of db.prepare("SELECT result_metadata FROM jobs WHERE status='completed' AND expires_at<=? AND result_metadata IS NOT NULL").all(now().toISOString())) {
+      const metadata = JSON.parse(row.result_metadata);
+      if (metadata.key && !metadata.objectDeletedAt) registerCleanup(metadata.key, 'expired');
+    }
+    await cleanupPending();
+  }
+
+  function resultMetadata(row, uploaded) {
+    return { fileName: `report-${row.id}-${row.report_id}.xlsx`, sizeBytes: uploaded.sizeBytes,
+      rowCount: uploaded.rowCount, storage: 's3', bucket: uploaded.bucket, key: uploaded.key,
+      ...(uploaded.etag && { etag: uploaded.etag }) };
+  }
+
+  async function uploadReport(row, signal) {
+    const key = objectKey(row.id, row.report_id);
+    registerCleanup(key);
+    const report = reports.find(item => item.id === row.report_id);
+    return storage.upload(key, (output, uploadSignal) => writeWorkbook(report, JSON.parse(row.parameters), output, { signal: uploadSignal }), { signal });
+  }
+
+  async function migrateLegacyFiles() {
+    const rows = db.prepare(`SELECT ${JOB_METADATA},length(file) AS file_size FROM jobs WHERE file IS NOT NULL`).all();
+    const readChunk = db.prepare('SELECT substr(file,?,?) AS chunk FROM jobs WHERE id=?');
+    for (const row of rows) {
+      if (row.status !== 'completed' || (row.expires_at && row.expires_at <= now().toISOString())) {
+        db.prepare('UPDATE jobs SET file=NULL WHERE id=?').run(row.id);
+        continue;
+      }
+      const previous = JSON.parse(row.result_metadata);
+      const key = objectKey(row.id, row.report_id);
+      registerCleanup(key);
+      // substr reads a bounded slice through SQLite; SELECT file would materialize
+      // the entire legacy workbook in the JS heap before uploading it.
+      async function* chunks() {
+        for (let offset = 1; offset <= row.file_size; offset += 65536) {
+          yield readChunk.get(offset, 65536, row.id).chunk;
+        }
+      }
+      const uploaded = await storage.upload(key, async (output, signal) => {
+        await pipeline(Readable.from(chunks(), { objectMode: false }), output, { signal });
+        return { rowCount: previous.rowCount };
+      });
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('UPDATE jobs SET result_metadata=?,file=NULL WHERE id=?')
+          .run(JSON.stringify({ ...resultMetadata(row, uploaded), fileName: previous.fileName }), row.id);
+        db.prepare('DELETE FROM object_cleanup WHERE object_key=?').run(key);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
   }
 
   function getJob(id) { return present(db.prepare(`SELECT ${JOB_METADATA} FROM jobs WHERE id=?`).get(id)); }
@@ -66,15 +171,15 @@ export async function createService(options = {}) {
     return getJob(Number(result.lastInsertRowid));
   }
 
-  function complete(row, file, rowCount, completedAt, notify = true) {
-    const fileName = `report-${row.id}-${row.report_id}.xlsx`;
+  function complete(row, uploaded, completedAt, notify = true) {
     const expiresAt = new Date(Date.parse(completedAt) + retentionDays * 86400000).toISOString();
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.prepare("UPDATE jobs SET status='completed',stage='Готово к скачиванию',completed_at=?,expires_at=?,result_metadata=?,file=?,ready_at=NULL WHERE id=?")
-        .run(completedAt, expiresAt, JSON.stringify({ fileName, sizeBytes: file.length, rowCount }), file, row.id);
+      db.prepare("UPDATE jobs SET status='completed',stage='Готово к скачиванию',completed_at=?,expires_at=?,result_metadata=?,file=NULL,ready_at=NULL WHERE id=?")
+        .run(completedAt, expiresAt, JSON.stringify(resultMetadata(row, uploaded)), row.id);
       if (notify) db.prepare('INSERT INTO notifications(job_id,title,created_at) VALUES(?,?,?)')
         .run(row.id, `Отчет по заданию №${row.id} готов к скачиванию`, completedAt);
+      db.prepare('DELETE FROM object_cleanup WHERE object_key=?').run(uploaded.key);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
@@ -102,22 +207,20 @@ export async function createService(options = {}) {
       { id: 1048, reportId: 'operations', parameters: period, status: 'queued', offset: 60000 },
     ];
     const prepared = [];
-    // Finish all fallible asynchronous generation before touching persistent seed data.
+    // Stream one demo file at a time. Only metadata is retained for the final
+    // transaction; upload intents survive startup failure and allow cleanup.
     for (const sample of seeds) {
-      const report = reports.find(item => item.id === sample.reportId);
       const createdAt = new Date(created - sample.offset).toISOString();
       let completedAt = null;
       let expiresAt = null;
       let metadata = null;
-      let file = null;
       let error = null;
       let stage = sample.status === 'running' ? 'Получение данных' : 'Ожидает окна запуска';
       if (sample.status === 'completed') {
-        const built = await buildWorkbook(report, sample.parameters);
-        file = built.file;
+        const built = await uploadReport({ id: sample.id, report_id: sample.reportId, parameters: JSON.stringify(sample.parameters) });
         completedAt = new Date(created - sample.offset + 60000).toISOString();
         expiresAt = new Date(Date.parse(completedAt) + retentionDays * 86400000).toISOString();
-        metadata = JSON.stringify({ fileName: `report-${sample.id}-${sample.reportId}.xlsx`, sizeBytes: file.length, rowCount: built.rowCount });
+        metadata = JSON.stringify(resultMetadata({ id: sample.id, report_id: sample.reportId }, built));
         stage = 'Готово к скачиванию';
       }
       if (sample.status === 'failed') {
@@ -128,45 +231,61 @@ export async function createService(options = {}) {
       prepared.push([sample.id, sample.reportId, JSON.stringify(sample.parameters), sample.status, stage, createdAt,
         sample.status === 'queued' ? null : createdAt,
         sample.status === 'running' ? new Date(created + processingDelayMs).toISOString() : null,
-        completedAt, expiresAt, metadata, file, error]);
+        completedAt, expiresAt, metadata, null, error]);
     }
     db.exec('BEGIN IMMEDIATE');
     try {
       const insert = db.prepare('INSERT INTO jobs(id,report_id,parameters,status,stage,created_at,started_at,ready_at,completed_at,expires_at,result_metadata,file,error_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
       for (const row of prepared) insert.run(...row);
       db.prepare("INSERT INTO settings(key,value) VALUES('initialized','1')").run();
+      for (const row of prepared) {
+        if (row[10]) db.prepare('DELETE FROM object_cleanup WHERE object_key=?').run(JSON.parse(row[10]).key);
+      }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
-  if (!db.prepare("SELECT value FROM settings WHERE key='initialized'").get()) {
-    const seedDemo = options.seedDemo ?? process.env['SEED_DEMO'] !== 'false';
-    try {
+  try {
+    if (setting('object_bucket') && setting('object_bucket') !== storage.bucket) throw new Error('S3_BUCKET differs from the bucket associated with this database');
+    await storage.check();
+    remember('object_bucket', storage.bucket);
+    await cleanupPending();
+    await migrateLegacyFiles();
+    if (!setting('initialized')) {
+      const seedDemo = options.seedDemo ?? process.env['SEED_DEMO'] !== 'false';
       if (seedDemo) await seed();
       else db.prepare("INSERT INTO settings(key,value) VALUES('initialized','1')").run();
-    } catch (error) { db.close(); throw error; }
+    }
+  } catch (error) {
+    await cleanupPending();
+    db.close();
+    if (ownsStorage) await storage.close();
+    throw error;
   }
 
   let busy = false;
   let closing = false;
+  let currentUpload;
   let currentTick = Promise.resolve();
   async function performTick() {
     if (busy || closing) return;
     busy = true;
     try {
       const stamp = now().toISOString();
-      db.prepare('UPDATE jobs SET file=NULL WHERE expires_at<=? AND file IS NOT NULL').run(stamp);
+      await cleanExpired();
       const active = db.prepare(`SELECT ${JOB_METADATA} FROM jobs WHERE status='running' ORDER BY id LIMIT 1`).get();
       if (active) {
         if (active.ready_at <= stamp) {
           try {
-            const report = reports.find(item => item.id === active.report_id);
-            const { file, rowCount } = await buildWorkbook(report, JSON.parse(active.parameters));
-            complete(active, file, rowCount, now().toISOString());
+            currentUpload = new AbortController();
+            const uploaded = await uploadReport(active, currentUpload.signal);
+            complete(active, uploaded, now().toISOString());
           } catch (error) {
-            fail(active, error.code === 'REPORT_FORMAT_MISMATCH' ? error.code : 'REPORT_GENERATION_FAILED',
-              error.code === 'REPORT_FORMAT_MISMATCH' ? 'Полученные данные не соответствуют формату отчета. Файл не создан.' : 'Не удалось сформировать отчет. Обратитесь в поддержку и укажите номер задания.', now().toISOString());
-          }
+            if (closing) db.prepare("UPDATE jobs SET status='queued',stage='Ожидает запуска',ready_at=NULL WHERE id=?").run(active.id);
+            else fail(active, error.code === 'REPORT_FORMAT_MISMATCH' ? error.code : 'REPORT_STORAGE_FAILED',
+              error.code === 'REPORT_FORMAT_MISMATCH' ? 'Полученные данные не соответствуют формату отчета. Файл не создан.' : 'Не удалось сформировать или сохранить отчет. Обратитесь в поддержку и укажите номер задания.', now().toISOString());
+            await cleanupPending();
+          } finally { currentUpload = undefined; }
         }
         return;
       }
@@ -198,6 +317,7 @@ export async function createService(options = {}) {
     getJob,
     tick,
     startWorker,
+    async readiness() { await storage.check(); return { status: 'ok', storage: 's3' }; },
     catalog() {
       return { reports, departments, config: { maxPeriodDays, retentionDays, timeZone: 'Europe/Moscow', nightStartHour: 0, nightEndHour: 6 }, serverTime: now().toISOString(), nextNightWindow: nextNightWindow(now()) };
     },
@@ -223,13 +343,21 @@ export async function createService(options = {}) {
       if (sort === 'asc') filtered.reverse();
       return { items: filtered.slice((page - 1) * pageSize, page * pageSize).map(present), total: filtered.length, allCount: all.length, updatedAt: now().toISOString() };
     },
-    download(id) {
-      const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(id);
+    async download(id, { signal } = {}) {
+      const row = db.prepare(`SELECT ${JOB_METADATA} FROM jobs WHERE id=?`).get(id);
       const job = present(row);
       if (job.status !== 'completed') throw new HttpError(409, 'RESULT_NOT_READY', 'Файл еще не готов.');
       if (row.expires_at <= now().toISOString()) throw new HttpError(410, 'RESULT_EXPIRED', 'Срок хранения файла истек. Сформируйте новый отчет.');
-      if (!row.file) throw new HttpError(410, 'RESULT_UNAVAILABLE', 'Файл больше недоступен. Сформируйте новый отчет.');
-      return { file: Buffer.from(row.file), fileName: job.result.fileName };
+      const metadata = JSON.parse(row.result_metadata);
+      if (!metadata.key || metadata.objectDeletedAt) throw new HttpError(410, 'RESULT_UNAVAILABLE', 'Файл больше недоступен. Сформируйте новый отчет.');
+      try {
+        const object = await storage.get(metadata.key, { signal });
+        return { ...object, fileName: job.result.fileName };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        if (['NoSuchKey', 'NotFound'].includes(error.name) || error.$metadata?.httpStatusCode === 404) throw new HttpError(410, 'RESULT_UNAVAILABLE', 'Файл больше недоступен. Сформируйте новый отчет.');
+        throw new HttpError(503, 'STORAGE_UNAVAILABLE', 'Хранилище отчетов временно недоступно. Повторите попытку позже.');
+      }
     },
     notifications() {
       const items = db.prepare('SELECT * FROM notifications ORDER BY is_read ASC,id DESC LIMIT 100').all().map(row => ({ id: row.id, jobId: row.job_id, title: row.title, createdAt: row.created_at, read: Boolean(row.is_read) }));
@@ -242,10 +370,12 @@ export async function createService(options = {}) {
       return { ok: true };
     },
     async close() {
+      if (closing) return currentTick;
       closing = true;
       clearInterval(timer);
-      await currentTick;
-      db.close();
+      currentUpload?.abort(new Error('Service shutting down'));
+      try { await currentTick; }
+      finally { db.close(); if (ownsStorage) await storage.close(); }
     },
   };
 }

@@ -5,9 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import ExcelJS from 'exceljs';
+import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { get as httpGet } from 'node:http';
+import { once } from 'node:events';
 import { createService } from './service.mjs';
 import { createApp } from './index.mjs';
 import { inNightWindow, nextNightWindow } from './domain.mjs';
+import { createFakeStorage, readDownload } from './test-support/fake-storage.mjs';
 
 const request = (reportId = 'obligations', parameters = {}) => ({ reportId, parameters: { startDate: '2026-11-01', endDate: '2026-11-15', department: '6000', ...parameters } });
 const makeClock = (initial = '2026-11-16T10:00:00Z') => {
@@ -15,12 +20,12 @@ const makeClock = (initial = '2026-11-16T10:00:00Z') => {
   return { now: () => new Date(value), set: stamp => { value = new Date(stamp); }, advance: milliseconds => { value = new Date(value.getTime() + milliseconds); } };
 };
 async function serviceFor(t, options = {}) {
-  const service = await createService({ dbPath: ':memory:', seedDemo: false, processingDelayMs: 0, ...options });
+  const service = await createService({ dbPath: ':memory:', seedDemo: false, processingDelayMs: 0, storage: createFakeStorage(), ...options });
   t.after(() => service.close());
   return service;
 }
 async function appFor(t, options = {}) {
-  const app = await createApp({ dbPath: ':memory:', seedDemo: false, processingDelayMs: 0, startWorker: false, ...options });
+  const app = await createApp({ dbPath: ':memory:', seedDemo: false, processingDelayMs: 0, startWorker: false, storage: createFakeStorage(), ...options });
   const address = await app.listen(0);
   t.after(() => app.close());
   return { app, url: `http://127.0.0.1:${address.port}` };
@@ -36,15 +41,17 @@ test('ordinary job persists state transitions and produces a readable XLSX with 
   const service = await serviceFor(t, { now: clock.now });
   const job = service.createJob(request());
   assert.equal(job.status, 'queued');
-  assert.throws(() => service.download(job.id), error => error.status === 409);
+  await assert.rejects(service.download(job.id), error => error.status === 409);
   await service.tick();
   assert.equal(service.getJob(job.id).status, 'running');
   await service.tick();
   const result = service.getJob(job.id);
   assert.equal(result.status, 'completed');
-  const { file, fileName } = service.download(job.id);
+  const { file, fileName } = await readDownload(service, job.id);
   assert.match(fileName, /^report-\d+-obligations\.xlsx$/);
   assert.equal(file.length, result.result.sizeBytes);
+  assert.equal(service.db.prepare('SELECT file FROM jobs WHERE id=?').get(job.id).file, null);
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM object_cleanup').get().count, 0);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(file);
   assert.equal(workbook.getWorksheet('Данные').actualRowCount, result.result.rowCount + 1);
@@ -107,40 +114,45 @@ test('configured limits are reflected in catalog and backend validation', async 
   assert.equal(service.createJob(request('payments', { endDate: '2026-11-02' })).status, 'queued');
 });
 
-test('download expires exactly at retention boundary and worker removes persisted file bytes', async t => {
+test('download expires exactly at retention boundary and worker removes the S3 object', async t => {
   const clock = makeClock();
-  const service = await serviceFor(t, { now: clock.now, retentionDays: 1 });
+  const storage = createFakeStorage();
+  const service = await serviceFor(t, { now: clock.now, retentionDays: 1, storage });
   const job = service.createJob(request());
   await service.tick();
   await service.tick();
   const expiresAt = service.getJob(job.id).expiresAt;
   clock.set(new Date(Date.parse(expiresAt) - 1));
-  assert.ok(service.download(job.id).file.length > 0);
+  assert.ok((await readDownload(service, job.id)).file.length > 0);
   clock.set(expiresAt);
-  assert.throws(() => service.download(job.id), error => error.status === 410 && error.code === 'RESULT_EXPIRED');
+  await assert.rejects(service.download(job.id), error => error.status === 410 && error.code === 'RESULT_EXPIRED');
   await service.tick();
   assert.equal(service.db.prepare('SELECT file FROM jobs WHERE id=?').get(job.id).file, null);
+  assert.equal(storage.objects.size, 0);
+  assert.equal(storage.deleted.length, 1);
+  assert.ok(JSON.parse(service.db.prepare('SELECT result_metadata FROM jobs WHERE id=?').get(job.id).result_metadata).objectDeletedAt);
   assert.equal(service.getJob(job.id).status, 'completed');
 });
 
 test('queued/running jobs survive restart and completed file remains identical after reopening', async t => {
   const directory = await temp(t);
   const dbPath = join(directory, 'reports.sqlite');
+  const storage = createFakeStorage();
   const clock = makeClock();
-  let service = await createService({ dbPath, seedDemo: false, now: clock.now, processingDelayMs: 0 });
+  let service = await createService({ dbPath, storage, seedDemo: false, now: clock.now, processingDelayMs: 0 });
   const job = service.createJob(request());
   await service.tick();
   assert.equal(service.getJob(job.id).status, 'running');
   await service.close();
-  service = await createService({ dbPath, seedDemo: true, now: clock.now, processingDelayMs: 0 });
+  service = await createService({ dbPath, storage, seedDemo: true, now: clock.now, processingDelayMs: 0 });
   assert.equal(service.listJobs(new URLSearchParams()).allCount, 1, 'existing empty-mode database must not be reseeded');
   assert.equal(service.getJob(job.id).status, 'queued');
   await service.tick();
   await service.tick();
-  const before = service.download(job.id).file;
+  const before = (await readDownload(service, job.id)).file;
   await service.close();
-  service = await createService({ dbPath, seedDemo: false, now: clock.now });
-  assert.deepEqual(service.download(job.id).file, before);
+  service = await createService({ dbPath, storage, seedDemo: false, now: clock.now });
+  assert.deepEqual((await readDownload(service, job.id)).file, before);
   assert.equal(service.notifications().unreadCount, 1);
   await service.close();
 });
@@ -152,26 +164,28 @@ test('six demo tasks include a terminal failure, real files and relative creatio
   assert.equal(jobs.total, 6);
   assert.deepEqual(jobs.items.map(job => job.id), [1048, 1047, 1046, 1045, 1044, 1043]);
   assert.equal(service.getJob(1045).error.code, 'REPORT_FORMAT_MISMATCH');
-  assert.throws(() => service.download(1045), error => error.status === 409);
+  await assert.rejects(service.download(1045), error => error.status === 409);
   await service.tick();
   await service.tick();
   assert.equal(service.getJob(1045).status, 'failed');
-  assert.ok(service.download(1046).file.length > 0);
+  assert.ok((await readDownload(service, 1046)).file.length > 0);
 });
 
 test('demo seed inserts and initialized marker roll back together if insertion fails', async t => {
   const directory = await temp(t);
   const dbPath = join(directory, 'reports.sqlite');
-  const service = await createService({ dbPath, seedDemo: false });
+  const storage = createFakeStorage();
+  const service = await createService({ dbPath, storage, seedDemo: false });
   service.db.exec("DELETE FROM settings; CREATE TRIGGER reject_demo BEFORE INSERT ON jobs WHEN NEW.id=1045 BEGIN SELECT RAISE(ABORT, 'test interruption'); END;");
   await service.close();
-  await assert.rejects(createService({ dbPath, seedDemo: true }), /test interruption/);
+  await assert.rejects(createService({ dbPath, storage, seedDemo: true }), /test interruption/);
+  assert.equal(storage.objects.size, 0, 'rolled back demo seed must not leave completed S3 objects');
   const db = new DatabaseSync(dbPath);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM jobs').get().count, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM settings').get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key='initialized'").get().count, 0);
   db.exec('DROP TRIGGER reject_demo');
   db.close();
-  const recovered = await createService({ dbPath, seedDemo: true });
+  const recovered = await createService({ dbPath, storage, seedDemo: true });
   assert.equal(recovered.listJobs(new URLSearchParams()).total, 6);
   await recovered.close();
 });
@@ -246,4 +260,214 @@ test('built UI static serving blocks path escape and symlinks outside public roo
   assert.equal((await fetch(`${url}/%2e%2e%2fsecret.txt`)).status, 404);
   assert.equal((await fetch(`${url}/leak.txt`)).status, 404);
   assert.equal((await fetch(`${url}/missing.js`)).status, 404);
+});
+
+test('job completion and notification wait for S3 upload acknowledgement', async t => {
+  const storage = createFakeStorage();
+  const originalUpload = storage.upload.bind(storage);
+  let acknowledge;
+  let uploaded;
+  const acknowledgement = new Promise(resolve => { acknowledge = resolve; });
+  const objectUploaded = new Promise(resolve => { uploaded = resolve; });
+  storage.upload = async (...args) => {
+    const result = await originalUpload(...args);
+    uploaded();
+    await acknowledgement;
+    return result;
+  };
+  const service = await serviceFor(t, { storage });
+  const job = service.createJob(request());
+  await service.tick();
+  const completing = service.tick();
+  await objectUploaded;
+  assert.equal(service.getJob(job.id).status, 'running');
+  assert.equal(service.notifications().unreadCount, 0);
+  await assert.rejects(service.download(job.id), error => error.status === 409);
+  acknowledge();
+  await completing;
+  assert.equal(service.getJob(job.id).status, 'completed');
+  assert.equal(service.notifications().unreadCount, 1);
+});
+
+test('failed upload never exposes a completed result and cleans a remotely written object', async t => {
+  const storage = createFakeStorage();
+  const originalUpload = storage.upload.bind(storage);
+  storage.upload = async (...args) => { await originalUpload(...args); throw new Error('S3 completion response failed'); };
+  const service = await serviceFor(t, { storage });
+  const job = service.createJob(request());
+  await service.tick();
+  await service.tick();
+  assert.equal(service.getJob(job.id).status, 'failed');
+  assert.equal(service.getJob(job.id).error.code, 'REPORT_STORAGE_FAILED');
+  assert.equal(service.getJob(job.id).result, undefined);
+  assert.equal(storage.objects.size, 0);
+  assert.equal(service.db.prepare('SELECT file FROM jobs WHERE id=?').get(job.id).file, null);
+  await assert.rejects(service.download(job.id), error => error.status === 409);
+  await service.tick();
+  assert.equal(service.getJob(job.id).status, 'failed');
+});
+
+test('expired-object deletion failures retain a durable cleanup intent and retry', async t => {
+  const clock = makeClock();
+  const storage = createFakeStorage();
+  const service = await serviceFor(t, { storage, now: clock.now });
+  const job = service.createJob(request());
+  await service.tick();
+  await service.tick();
+  clock.set(service.getJob(job.id).expiresAt);
+  const originalDelete = storage.delete.bind(storage);
+  storage.delete = async () => { throw new Error('S3 unavailable'); };
+  await service.tick();
+  assert.equal(storage.objects.size, 1);
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM object_cleanup').get().count, 1);
+  assert.equal(JSON.parse(service.db.prepare('SELECT result_metadata FROM jobs WHERE id=?').get(job.id).result_metadata).objectDeletedAt, undefined);
+  await assert.rejects(service.download(job.id), error => error.status === 410);
+  storage.delete = originalDelete;
+  await service.tick();
+  assert.equal(storage.objects.size, 0);
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM object_cleanup').get().count, 0);
+});
+
+test('failed metadata commit leaves cleanup durable across service restart', async t => {
+  const directory = await temp(t);
+  const dbPath = join(directory, 'commit.sqlite');
+  const storage = createFakeStorage();
+  const originalDelete = storage.delete.bind(storage);
+  storage.delete = async () => { throw new Error('temporary delete outage'); };
+  let service = await createService({ dbPath, storage, seedDemo: false, processingDelayMs: 0 });
+  const job = service.createJob(request());
+  service.db.exec("CREATE TRIGGER reject_completion BEFORE UPDATE ON jobs WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'test commit failure'); END;");
+  await service.tick();
+  await service.tick();
+  assert.equal(service.getJob(job.id).status, 'failed');
+  assert.equal(storage.objects.size, 1);
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM object_cleanup').get().count, 1);
+  await service.close();
+  storage.delete = originalDelete;
+  service = await createService({ dbPath, storage, seedDemo: false });
+  t.after(() => service.close());
+  assert.equal(storage.objects.size, 0);
+  assert.equal(service.db.prepare('SELECT COUNT(*) AS count FROM object_cleanup').get().count, 0);
+});
+
+test('graceful shutdown cancels upload and preserves the job for restart', async t => {
+  const directory = await temp(t);
+  const dbPath = join(directory, 'shutdown.sqlite');
+  const storage = createFakeStorage();
+  const originalUpload = storage.upload.bind(storage);
+  let uploaded;
+  const objectUploaded = new Promise(resolve => { uploaded = resolve; });
+  storage.upload = async (key, producer, { signal } = {}) => {
+    await originalUpload(key, producer, { signal });
+    uploaded();
+    await new Promise((resolve, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  };
+  let service = await createService({ dbPath, storage, seedDemo: false, processingDelayMs: 0 });
+  const job = service.createJob(request());
+  await service.tick();
+  const active = service.tick();
+  await objectUploaded;
+  await service.close();
+  await active;
+  assert.equal(storage.objects.size, 0);
+  storage.upload = originalUpload;
+  service = await createService({ dbPath, storage, seedDemo: false, processingDelayMs: 0 });
+  t.after(() => service.close());
+  assert.equal(service.getJob(job.id).status, 'queued');
+  assert.equal(service.notifications().unreadCount, 0);
+  await service.tick(); await service.tick();
+  assert.equal(service.getJob(job.id).status, 'completed');
+  assert.equal(service.notifications().unreadCount, 1);
+});
+
+test('legacy SQLite files migrate in bounded chunks and remain intact after a failed upload', async t => {
+  const directory = await temp(t);
+  const dbPath = join(directory, 'legacy.sqlite');
+  const storage = createFakeStorage();
+  let service = await createService({ dbPath, storage, seedDemo: false });
+  const job = service.createJob(request());
+  // Opaque existing bytes must be moved unchanged, not regenerated from fixtures.
+  const legacy = randomBytes(65536 * 3 + 17);
+  const expires = new Date(Date.now() + 86400000).toISOString();
+  service.db.prepare("UPDATE jobs SET status='completed',file=?,expires_at=?,result_metadata=? WHERE id=?")
+    .run(legacy, expires, JSON.stringify({ fileName: 'legacy.xlsx', sizeBytes: legacy.length, rowCount: 42 }), job.id);
+  await service.close();
+  const originalUpload = storage.upload.bind(storage);
+  storage.upload = async () => { throw new Error('migration upload failed'); };
+  await assert.rejects(createService({ dbPath, storage }), /migration upload failed/);
+  const database = new DatabaseSync(dbPath);
+  assert.deepEqual(Buffer.from(database.prepare('SELECT file FROM jobs WHERE id=?').get(job.id).file), legacy);
+  database.close();
+  storage.upload = originalUpload;
+  service = await createService({ dbPath, storage });
+  t.after(() => service.close());
+  const result = await readDownload(service, job.id);
+  assert.deepEqual(result.file, legacy);
+  assert.equal(result.fileName, 'legacy.xlsx');
+  assert.ok(storage.uploadChunkSizes.length >= 4);
+  assert.ok(Math.max(...storage.uploadChunkSizes) <= 65536);
+  assert.equal(service.db.prepare('SELECT file FROM jobs WHERE id=?').get(job.id).file, null);
+  assert.equal(service.getJob(job.id).result.rowCount, 42);
+});
+
+test('different databases use distinct S3 namespaces even for equal job IDs', async t => {
+  const storage = createFakeStorage();
+  const first = await serviceFor(t, { storage });
+  const second = await serviceFor(t, { storage });
+  const a = first.createJob(request());
+  const b = second.createJob(request());
+  assert.equal(a.id, b.id);
+  for (const service of [first, second]) { await service.tick(); await service.tick(); }
+  assert.equal(storage.objects.size, 2);
+  assert.ok((await readDownload(first, a.id)).file.length > 0);
+  assert.ok((await readDownload(second, b.id)).file.length > 0);
+});
+
+test('S3 missing objects and temporary failures produce distinct download responses', async t => {
+  const storage = createFakeStorage();
+  const { app, url } = await appFor(t, { storage });
+  const job = app.service.createJob(request());
+  await app.service.tick(); await app.service.tick();
+  const originalGet = storage.get.bind(storage);
+  storage.get = async () => { throw new Error('network failure'); };
+  assert.equal((await fetch(`${url}/api/jobs/${job.id}/download`)).status, 503);
+  storage.get = originalGet;
+  storage.objects.clear();
+  assert.equal((await fetch(`${url}/api/jobs/${job.id}/download`)).status, 410);
+  storage.check = async () => { throw new Error('bucket offline'); };
+  assert.equal((await fetch(`${url}/api/ready`)).status, 503);
+  assert.equal((await fetch(`${url}/api/health`)).status, 200);
+});
+
+test('disconnecting a download cancels the S3 readable instead of draining the full object', async t => {
+  const storage = createFakeStorage();
+  const { app, url } = await appFor(t, { storage });
+  const job = app.service.createJob(request());
+  await app.service.tick(); await app.service.tick();
+  let chunks = 0;
+  let source;
+  let sourceReady;
+  const ready = new Promise(resolve => { sourceReady = resolve; });
+  storage.get = async () => {
+    source = new Readable({
+      read() { setImmediate(() => { if (!this.destroyed) { chunks++; this.push(Buffer.alloc(65536)); } }); },
+    });
+    sourceReady();
+    return { body: source };
+  };
+  const responseStarted = new Promise((resolve, reject) => {
+    const request = httpGet(`${url}/api/jobs/${job.id}/download`, response => {
+      response.once('data', () => { response.destroy(); request.destroy(); resolve(); });
+    });
+    request.on('error', error => { if (error.code !== 'ECONNRESET') reject(error); });
+  });
+  await ready;
+  const closed = once(source, 'close').catch(error => { if (error.name !== 'AbortError') throw error; });
+  await responseStarted;
+  await closed;
+  assert.equal(source.destroyed, true);
+  assert.ok(chunks < 100, `read ${chunks} chunks after client disconnect`);
 });
