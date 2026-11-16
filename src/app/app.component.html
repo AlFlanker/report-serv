@@ -139,11 +139,41 @@
           }
           @case ('running') { <section class="state-panel state-running"><h3><nz-icon nzType="sync" /> Отчет формируется</h3><p>{{ job.stage }}</p><p class="secondary">Вы можете закрыть вкладку и вернуться позже. О готовности сообщим в ЛК.</p></section> }
           @case ('failed') {
-            <section class="state-panel state-failed"><h3><nz-icon nzType="exclamation-circle" /> Не удалось сформировать отчет</h3><p>{{ job.error?.message || 'Не удалось обработать данные отчета. Файл не создан.' }}</p><p class="secondary">Обратитесь в поддержку и укажите номер задания.</p></section>
+            <section class="state-panel state-failed"><h3><nz-icon nzType="exclamation-circle" /> Не удалось сформировать отчет</h3><p>{{ job.error?.message || 'Не удалось обработать данные отчета. Файл не создан.' }}</p><p class="secondary">@if (job.canRestart) { Можно возобновить выполнение с незавершённого шага. Результаты завершённых шагов сохранятся. } @else { Обратитесь в поддержку и укажите номер задания. }</p></section>
+            @if (job.canRestart) {
+              <button nz-button nzType="primary" class="restart-job" data-testid="restart-job" [nzLoading]="restartingId() === job.id" [disabled]="restartingId() !== null && restartingId() !== job.id" (click)="restartJob(job)">Возобновить выполнение</button>
+            }
+            @if (restartError()) { <div class="restart-error" data-testid="restart-error" role="alert"><nz-alert nzType="error" [nzMessage]="restartError()" nzShowIcon /></div> }
             <button nz-button class="copy-support" (click)="copySupport(job)"><nz-icon [nzType]="supportCopied() ? 'check' : 'copy'" /> {{ supportCopied() ? 'Сведения скопированы' : 'Скопировать сведения' }}</button>
           }
         }
         <section class="detail-section"><h3>Параметры</h3><dl><div class="parameter-period"><dt>{{ job.parameters.asOfDate ? 'Дата' : 'Период' }}</dt><dd>{{ period(job) }}</dd></div><div><dt>Подразделение</dt><dd>{{ departmentName(job.parameters.department) }}</dd></div>@if (job.parameters.account) { <div><dt>Лицевой счет</dt><dd>{{ job.parameters.account }}</dd></div> }</dl></section>
+        @if (detailLoaded()) {
+          <section class="detail-section steps-section" data-testid="job-steps" aria-labelledby="job-steps-heading">
+            <h3 id="job-steps-heading">Шаги выполнения</h3>
+            @if (job.steps?.length) {
+              <ol class="execution-steps">
+                @for (reportStep of job.steps; track reportStep.name) {
+                  <li [attr.data-testid]="'job-step-' + reportStep.name" [attr.data-status]="reportStep.status" [class]="'execution-step step-' + reportStep.status">
+                    <nz-icon class="step-icon" [nzType]="stepStatusIcon(reportStep.status)" [nzSpin]="reportStep.status === 'running'" aria-hidden="true" />
+                    <div class="step-content">
+                      <div class="step-heading"><h4>{{ reportStep.label }}</h4><span class="step-status">{{ stepStatusLabel(reportStep.status) }}</span></div>
+                      @if ((reportStep.attempt ?? 0) > 1) { <p class="step-attempt secondary">Попытка {{ reportStep.attempt }}</p> }
+                      @if (reportStep.startedAt) { <p class="step-time secondary">Начато {{ dateTime(reportStep.startedAt) }} МСК</p> }
+                      @if (reportStep.completedAt) { <p class="step-time secondary">Завершено {{ dateTime(reportStep.completedAt) }} МСК</p> }
+                      @if ((reportStep.readCount ?? 0) > 0 || (reportStep.writeCount ?? 0) > 0) {
+                        <p class="step-counts secondary">Прочитано строк: {{ number(reportStep.readCount ?? 0) }} · Записано: {{ number(reportStep.writeCount ?? 0) }}</p>
+                      }
+                      @if (reportStep.error) { <p class="step-error">{{ reportStep.error }}</p> }
+                    </div>
+                  </li>
+                }
+              </ol>
+            } @else {
+              <p class="secondary steps-empty">{{ job.status === 'queued' || job.status === 'running' ? 'Сведения о шагах появятся после начала выполнения.' : 'Для этого задания история шагов недоступна.' }}</p>
+            }
+          </section>
+        }
         @if (job.status === 'queued') {
           <section class="detail-section"><h3>Что дальше</h3><div class="timeline-item"><nz-icon nzType="clock-circle" /><div><h4>В очереди</h4><p class="secondary">Задание сохранено {{ dateTime(job.createdAt) }} МСК.</p></div></div><div class="timeline-item"><nz-icon nzType="bell" /><div><h4>Уведомим о готовности</h4><p class="secondary">Можно закрыть вкладку и вернуться позже.</p></div></div></section>
         } @else if (job.status === 'failed') {

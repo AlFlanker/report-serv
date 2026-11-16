@@ -28,9 +28,9 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm start',
-    url: 'http://127.0.0.1:4310',
+    url: 'http://127.0.0.1:4310/api/ready',
     reuseExistingServer: false,
-    timeout: 120000,
+    timeout: 180000,
     env: {
       API_PORT: '4311',
       WEB_PORT: '4310',

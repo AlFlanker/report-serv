@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { openDatabase } from '../server/database.mjs';
-import { createS3Storage } from '../server/s3-storage.mjs';
+import { openDatabase } from './legacy/database.mjs';
+import { createS3Storage } from './legacy/s3-storage.mjs';
 
 const IMPORT_REASON = 'sqlite-import';
 const CHUNK_BYTES = 64 * 1024;

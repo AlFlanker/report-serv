@@ -15,7 +15,7 @@ import { NzPaginationModule } from 'ng-zorro-antd/pagination';
 import { NzSelectModule } from 'ng-zorro-antd/select';
 import { NzSpinModule } from 'ng-zorro-antd/spin';
 import { NzTableModule } from 'ng-zorro-antd/table';
-import { Catalog, JobList, JobStatus, ReportDefinition, ReportJob, ReportNotification, ReportParameters, TimeWindow } from './models';
+import { Catalog, JobList, JobStatus, ReportDefinition, ReportJob, ReportNotification, ReportParameters, ReportStepStatus, TimeWindow } from './models';
 import { StatusBadgeComponent } from './status-badge.component';
 
 @Component({
@@ -42,6 +42,9 @@ export class AppComponent {
   readonly refreshing = signal(false);
   readonly loadError = signal('');
   readonly detailError = signal('');
+  readonly detailLoaded = signal(false);
+  readonly restartError = signal('');
+  readonly restartingId = signal<number | null>(null);
   readonly selectedJob = signal<ReportJob | null>(null);
   readonly modalOpen = signal(false);
   readonly step = signal(1);
@@ -218,14 +221,41 @@ export class AppComponent {
       error: error => { this.saving.set(false); this.submitError.set(this.errorMessage(error, 'Не удалось создать задание. Попробуйте ещё раз.')); },
     });
   }
-  openDetails(job: ReportJob): void { this.detailRequest?.unsubscribe(); this.selectedJob.set(job); this.detailError.set(''); this.supportCopied.set(false); this.refreshDetail(); }
-  closeDetails(): void { this.detailRequest?.unsubscribe(); this.selectedJob.set(null); }
+  openDetails(job: ReportJob): void {
+    this.detailRequest?.unsubscribe(); this.selectedJob.set(job);
+    this.detailError.set(''); this.detailLoaded.set(false); this.restartError.set('');
+    this.supportCopied.set(false); this.refreshDetail();
+  }
+  closeDetails(): void { this.detailRequest?.unsubscribe(); this.selectedJob.set(null); this.restartError.set(''); }
   refreshDetail(): void {
     const id = this.selectedJob()?.id;
-    if (id === undefined || (this.detailRequest && !this.detailRequest.closed)) return;
+    if (id === undefined || this.restartingId() === id || (this.detailRequest && !this.detailRequest.closed)) return;
     this.detailRequest = this.http.get<ReportJob>(`/api/jobs/${id}`).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
-      next: job => { if (this.selectedJob()?.id === id) { this.selectedJob.set(job); this.detailError.set(''); } },
+      next: job => { if (this.selectedJob()?.id === id) { this.selectedJob.set(job); this.detailError.set(''); this.detailLoaded.set(true); } },
       error: error => { if (this.selectedJob()?.id === id) this.detailError.set(this.errorMessage(error, 'Не удалось обновить сведения о задании.')); },
+    });
+  }
+  restartJob(job: ReportJob): void {
+    if (job.status !== 'failed' || !job.canRestart || this.restartingId() !== null) return;
+    // A previous poll must not replace the accepted restart with its old status.
+    this.detailRequest?.unsubscribe();
+    this.restartingId.set(job.id); this.restartError.set('');
+    this.http.post<ReportJob>(`/api/jobs/${job.id}/restart`, {}).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: updated => {
+        this.restartingId.set(null); this.highlightedId.set(updated.id);
+        if (this.selectedJob()?.id === updated.id) {
+          this.selectedJob.set(updated); this.detailError.set(''); this.detailLoaded.set(true);
+        }
+        this.loadJobs(); this.refreshDetail();
+        this.notices.success(`Задание №${updated.id} возвращено в очередь`, 'Выполнение продолжится с незавершённого шага.', { nzDuration: 6000 });
+      },
+      error: error => {
+        this.restartingId.set(null);
+        const message = this.errorMessage(error, 'Не удалось возобновить выполнение. Обновите сведения о задании и повторите попытку.');
+        if (this.selectedJob()?.id === job.id) this.restartError.set(message);
+        else this.notices.error(`Задание №${job.id}`, message);
+        this.refreshDetail();
+      },
     });
   }
   download(job: ReportJob): void {
@@ -271,6 +301,12 @@ export class AppComponent {
   departmentName(id: string): string { const dep = this.catalog()?.departments.find(item => item.id === id); return dep ? `${dep.id} — ${dep.name}` : id; }
   fileSize(bytes = 0): string { return bytes >= 1048576 ? `${(bytes / 1048576).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ` : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString('ru-RU')} КБ`; }
   number(value: number): string { return value.toLocaleString('ru-RU'); }
+  stepStatusLabel(status: ReportStepStatus): string {
+    return { pending: 'Ожидает выполнения', running: 'Выполняется', completed: 'Завершено', failed: 'Ошибка', stopped: 'Остановлено', skipped: 'Пропущено' }[status] ?? 'Ожидает выполнения';
+  }
+  stepStatusIcon(status: ReportStepStatus): string {
+    return { pending: 'clock-circle', running: 'sync', completed: 'check', failed: 'exclamation-circle', stopped: 'clock-circle', skipped: 'right' }[status] ?? 'clock-circle';
+  }
   expired(job: ReportJob): boolean { return !!job.expiresAt && new Date(job.expiresAt).getTime() <= Date.now() + this.serverOffset; }
   waitingForWindow(job: ReportJob): boolean { return !!job.nextWindow && Date.parse(job.nextWindow.start) > Date.now() + this.serverOffset; }
   windowLabel(window?: TimeWindow): string {

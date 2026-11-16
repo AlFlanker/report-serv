@@ -51,7 +51,14 @@ test('создание отчёта, выполнение после закры�
   await page.getByTestId('start-report').click();
   const response = await responseEvent;
   expect(response.status()).toBe(201);
-  const job = await response.json();
+  expect(response.request().postDataJSON().parameters).toMatchObject({
+    startDate: '2026-10-01', endDate: '2026-10-31', account: '03210001234',
+  });
+  // Angular's fetch teardown can release a completed chunked response before
+  // Chromium exposes its body to CDP. Use the ID confirmed in the actual UI.
+  const createdRow = page.locator('tr.new-job');
+  await expect(createdRow).toHaveAttribute('data-testid', /^job-row-\d+$/);
+  const job = { id: Number((await createdRow.getAttribute('data-testid')).replace('job-row-', '')) };
   await page.close();
   await expect.poll(async () => {
     const result = await request.get(`/api/jobs/${job.id}`);
@@ -67,6 +74,12 @@ test('создание отчёта, выполнение после закры�
   await workbook.xlsx.readFile(await download.path());
   expect(workbook.getWorksheet('Данные').rowCount).toBeGreaterThan(1);
   expect(workbook.getWorksheet('Параметры').getColumn(2).values).toContain('2026-10-31');
+  await reopened.getByTestId(`job-details-${job.id}`).click();
+  await expect(reopened.getByTestId('job-steps')).toBeVisible();
+  await expect(reopened.getByTestId('job-step-extract')).toHaveAttribute('data-status', 'completed');
+  await expect(reopened.getByTestId('job-step-render')).toHaveAttribute('data-status', 'completed');
+  await expect(reopened.getByTestId('job-step-publish')).toHaveAttribute('data-status', 'completed');
+  await expect(reopened.getByTestId('restart-job')).toHaveCount(0);
 });
 
 test('период свыше 31 дня не отправляется на сервер', async ({ page }) => {
@@ -132,4 +145,46 @@ test('узкий экран сохраняет доступ к форме и н�
   await page.getByTestId('next-step').click();
   await expect(page.getByTestId('as-of-date')).toBeVisible();
   await expect(page.getByTestId('start-report')).toBeVisible();
+});
+
+test('ошибка повторного запуска сохраняет шаги, успешный запуск возвращает задание в очередь', async ({ page, request }) => {
+  const response = await request.get('/api/jobs/1046');
+  expect(response.ok()).toBe(true);
+  const original = await response.json();
+  let attempts = 0;
+  let detail = {
+    ...original,
+    status: 'failed', stage: 'Ошибка формирования Excel', canRestart: true,
+    error: { code: 'REPORT_STEP_FAILED', message: 'Не удалось сформировать Excel.', at: new Date().toISOString() },
+    steps: [
+      { name: 'extract', label: 'Получение данных', status: 'completed', attempt: 1, writeCount: 5 },
+      { name: 'render', label: 'Формирование Excel', status: 'failed', attempt: 1, error: 'Ошибка записи документа.' },
+      { name: 'publish', label: 'Публикация результата', status: 'pending' },
+    ],
+  };
+  // Only the transient failure fixture is mocked here; persistence and Batch
+  // restart are exercised against PostgreSQL/S3 in BatchIntegrationTest.
+  await page.route('**/api/jobs/1046', route => route.fulfill({ json: detail }));
+  await page.route('**/api/jobs/1046/restart', async route => {
+    expect(route.request().method()).toBe('POST');
+    attempts++;
+    if (attempts === 1) {
+      await route.fulfill({ status: 409, json: { error: { code: 'RESTART_NOT_ALLOWED', message: 'Повторный запуск временно недоступен.' } } });
+      return;
+    }
+    detail = { ...detail, status: 'queued', stage: 'Ожидает повторного запуска', canRestart: false, error: undefined };
+    await route.fulfill({ json: detail });
+  });
+  await page.goto('/');
+  await page.getByTestId('job-details-1046').click();
+  await expect(page.getByTestId('job-step-extract')).toHaveAttribute('data-status', 'completed');
+  await expect(page.getByTestId('job-step-render')).toContainText('Ошибка записи документа.');
+  await page.getByTestId('restart-job').click();
+  await expect(page.getByTestId('restart-error')).toContainText('Повторный запуск временно недоступен.');
+  await expect(page.getByTestId('job-step-extract')).toHaveAttribute('data-status', 'completed');
+  await page.getByTestId('restart-job').click();
+  await expect(page.getByTestId('restart-job')).toHaveCount(0);
+  await expect(page.getByTestId('details-drawer')).toContainText('В очереди');
+  await expect(page.getByTestId('job-step-extract')).toHaveAttribute('data-status', 'completed');
+  expect(attempts).toBe(2);
 });

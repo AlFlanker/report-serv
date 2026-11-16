@@ -14,18 +14,18 @@ function stop(code = 0) {
   setTimeout(() => {
     for (const child of children) child.kill('SIGKILL');
     process.exit(code);
-  }, 3000).unref();
+  }, 30000).unref();
   process.exitCode = code;
 }
 
 for (const args of [
-  ['server/index.mjs'],
+  ['scripts/java-api.mjs'],
   ['node_modules/@angular/cli/bin/ng.js', 'serve', '--host', '0.0.0.0', '--port', webPort, '--proxy-config', 'proxy.conf.cjs', '--poll', '1000'],
 ]) {
   const child = spawn(process.execPath, args, {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env, PORT: args[0] === 'server/index.mjs' ? apiPort : webPort, API_PORT: apiPort },
+    env: { ...process.env, PORT: args[0] === 'scripts/java-api.mjs' ? apiPort : webPort, API_PORT: apiPort },
   });
   children.push(child);
   child.on('error', error => {

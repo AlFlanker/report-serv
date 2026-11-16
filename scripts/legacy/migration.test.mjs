@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
-import { migrateSqlite } from '../scripts/migrate-sqlite.mjs';
+import { migrateSqlite } from '../migrate-sqlite.mjs';
 import { postgresFixture } from './test-support/postgres.mjs';
 import { createFakeStorage } from './test-support/fake-storage.mjs';
 

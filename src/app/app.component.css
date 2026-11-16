@@ -112,6 +112,8 @@ h1 { font-size: 28px; font-weight: 600; line-height: 38px; margin: 0 0 4px; lett
 .state-running h3 { color: var(--primary); }
 .expiry-caption { font-size: 12px; margin-top: 18px; }
 .copy-support { margin-top: 20px; min-width: 254px; }
+.restart-job { margin-top: 20px; width: 100%; }
+.restart-error { margin-top: 16px; }
 .detail-section { padding: 26px 0; border-bottom: 1px solid var(--border); }
 .detail-section:last-child { border-bottom: 0; }
 .detail-section h3 { font-size: 14px; font-weight: 600; margin: 0 0 20px; }
@@ -129,6 +131,20 @@ h1 { font-size: 28px; font-weight: 600; line-height: 38px; margin: 0 0 4px; lett
 .support-code { color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
 .detail-section > p.secondary { font-size: 12px; }
 .execution-note { margin: 24px 0 0; }
+.execution-steps { list-style: none; margin: 0; padding: 0; }
+.execution-step { display: flex; gap: 14px; padding-bottom: 22px; }
+.execution-step:last-child { padding-bottom: 0; }
+.step-icon { flex: 0 0 22px; font-size: 19px; padding-top: 2px; color: var(--secondary); }
+.step-content { min-width: 0; flex: 1; }
+.step-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.step-heading h4 { flex: 1 1 180px; font-size: 13px; font-weight: 500; line-height: 21px; margin: 0; }
+.step-status { font-size: 12px; line-height: 21px; color: var(--secondary); }
+.step-content p { margin: 5px 0 0; font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
+.step-completed .step-icon, .step-completed .step-status { color: #2b824a; }
+.step-running .step-icon, .step-running .step-status { color: var(--primary); }
+.step-failed .step-icon, .step-failed .step-status, .step-error { color: #ce3333; }
+.step-stopped .step-icon, .step-stopped .step-status { color: #946000; }
+.steps-empty { margin: 0; line-height: 20px; }
 .drawer-footer { display: flex; justify-content: flex-end; }
 .drawer-footer .ant-btn { min-width: 128px; }
 @media (min-width: 1600px) { .search-field { width: 34%; } .status-filter { width: 17.5%; } .created-filter { width: 22%; } }

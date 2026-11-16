@@ -6,6 +6,9 @@ x-app-image: &app-image
     context: .
 
 x-s3-environment: &s3-environment
+  # Container-to-container traffic must stay on the Compose network.
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},s3,postgres
+  no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},s3,postgres
   S3_ENDPOINT: http://s3:8333
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_BUCKET: ${S3_BUCKET:-reports}
@@ -66,7 +69,10 @@ services:
     restart: unless-stopped
 
   s3-init:
-    image: report-serv:local
+    image: report-serv-init:local
+    build:
+      context: .
+      target: s3-init
     pull_policy: never
     profiles: [app]
     command: ["node", "scripts/init-s3.mjs"]
@@ -79,6 +85,7 @@ services:
   app:
     <<: *app-image
     profiles: [app]
+    stop_grace_period: 3m
     environment:
       <<: *s3-environment
       HOST: 0.0.0.0
