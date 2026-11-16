@@ -8,6 +8,7 @@ import { S3Client, ListObjectsV2Command, DeleteObjectsCommand, ListMultipartUplo
 import { createS3Storage } from '../server/s3-storage.mjs';
 import { writeWorkbook } from '../server/workbook.mjs';
 import { createApp } from '../server/index.mjs';
+import { postgresFixture } from '../server/test-support/postgres.mjs';
 
 async function fixture(t) {
   const bucket = process.env.S3_BUCKET || 'reports';
@@ -44,21 +45,24 @@ async function fixture(t) {
 test('real S3: API creates XLSX, stores only metadata, downloads and deletes an expired object', { timeout: 30000 }, async t => {
   const { storage, client, bucket } = await fixture(t);
   let now = new Date('2026-11-16T10:00:00Z');
-  const app = await createApp({ storage, dbPath: ':memory:', seedDemo: false, startWorker: false, processingDelayMs: 0, now: () => new Date(now) });
-  t.after(() => app.close());
+  let app;
+  t.after(() => app?.close());
+  const database = await postgresFixture(t);
+  app = await createApp({ ...database, storage, seedDemo: false, startWorker: false, processingDelayMs: 0, now: () => new Date(now) });
   const address = await app.listen(0);
   const url = `http://127.0.0.1:${address.port}`;
   assert.equal((await fetch(`${url}/api/ready`)).status, 200);
-  const job = app.service.createJob({ reportId: 'turnovers', parameters: {
+  const job = await app.service.createJob({ reportId: 'turnovers', parameters: {
     department: '6000', account: '03210001234', startDate: '2026-10-01', endDate: '2026-10-31',
   } });
   await app.service.tick();
   await app.service.tick();
-  const ready = app.service.getJob(job.id);
+  const ready = await app.service.getJob(job.id);
   assert.equal(ready.status, 'completed');
-  const record = app.service.db.prepare('SELECT file,result_metadata FROM jobs WHERE id=?').get(job.id);
-  assert.equal(record.file, null);
-  const metadata = JSON.parse(record.result_metadata);
+  const record = (await app.service.db.query('SELECT result_metadata FROM jobs WHERE id=$1', [job.id])).rows[0];
+  const metadata = record.result_metadata;
+  const columns = await app.service.db.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='jobs' AND column_name='file'");
+  assert.equal(columns.rowCount, 0);
   const object = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: metadata.key }));
   assert.equal(object.ContentLength, ready.result.sizeBytes);
   const response = await fetch(`${url}/api/jobs/${job.id}/download`);

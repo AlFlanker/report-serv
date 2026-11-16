@@ -17,6 +17,25 @@ x-s3-environment: &s3-environment
   S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?Run node scripts/setup-local-s3.mjs first}
 
 services:
+  postgres:
+    image: postgres@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-reports}
+      POSTGRES_DB: ${POSTGRES_DB:-reports}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run node scripts/setup-local-postgres.mjs first}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
   s3:
     image: chrislusf/seaweedfs@sha256:4b42c212543a0acd4c0e675215ecdcaf62a186ef98def76c7e12701871222d15
     command:
@@ -64,19 +83,22 @@ services:
       <<: *s3-environment
       HOST: 0.0.0.0
       PORT: 3001
-      DB_PATH: /app/.data/reports.sqlite
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Run node scripts/setup-local-postgres.mjs first}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-public}
       SEED_DEMO: ${SEED_DEMO:-true}
       MAX_PERIOD_DAYS: ${MAX_PERIOD_DAYS:-31}
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
     ports:
       - "127.0.0.1:3001:3001"
-    volumes:
-      - app-data:/app/.data
     depends_on:
+      postgres:
+        condition: service_healthy
       s3-init:
         condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   s3-data:
+  postgres-data:
+  # Retain the previous SQLite volume for explicit migration/backup only.
   app-data:

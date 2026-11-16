@@ -42,18 +42,18 @@ export async function createApp(options = {}) {
       if (request.method === 'GET' && path === '/api/health') return json(response, 200, { status: 'ok' });
       if (request.method === 'GET' && path === '/api/ready') {
         try { return json(response, 200, await service.readiness()); }
-        catch { throw new HttpError(503, 'STORAGE_UNAVAILABLE', 'Хранилище отчетов временно недоступно.'); }
+        catch { throw new HttpError(503, 'DEPENDENCY_UNAVAILABLE', 'База данных или хранилище отчетов временно недоступны.'); }
       }
       if (request.method === 'GET' && path === '/api/catalog') return json(response, 200, service.catalog());
-      if (request.method === 'GET' && path === '/api/jobs') return json(response, 200, service.listJobs(url.searchParams));
-      if (request.method === 'POST' && path === '/api/jobs') return json(response, 201, service.createJob(await body(request)));
-      if (request.method === 'GET' && path === '/api/notifications') return json(response, 200, service.notifications());
-      if (request.method === 'POST' && path === '/api/notifications/read') return json(response, 200, service.markNotifications(await body(request)));
+      if (request.method === 'GET' && path === '/api/jobs') return json(response, 200, await service.listJobs(url.searchParams));
+      if (request.method === 'POST' && path === '/api/jobs') return json(response, 201, await service.createJob(await body(request)));
+      if (request.method === 'GET' && path === '/api/notifications') return json(response, 200, await service.notifications());
+      if (request.method === 'POST' && path === '/api/notifications/read') return json(response, 200, await service.markNotifications(await body(request)));
       const jobRoute = /^\/api\/jobs\/([1-9]\d*)(\/download)?$/.exec(path);
       if (request.method === 'GET' && jobRoute) {
         const id = Number(jobRoute[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(400, 'INVALID_JOB_ID', 'Некорректный номер задания.');
-        if (!jobRoute[2]) return json(response, 200, service.getJob(id));
+        if (!jobRoute[2]) return json(response, 200, await service.getJob(id));
         const controller = new AbortController();
         const stop = () => { if (!response.writableFinished) controller.abort(); };
         request.once('aborted', stop);
@@ -135,7 +135,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   await app.listen(port, process.env['HOST'] ?? '127.0.0.1');
   console.log(`Report API listening on port ${port}`);
   let stopped = false;
-  const stop = async () => { if (stopped) return; stopped = true; await app.close(); };
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true;
+    try { await app.close(); }
+    catch {
+      process.exitCode = 1;
+      console.error('Report API shutdown completed with an interrupted database operation');
+    }
+  };
+  const onDatabaseLost = () => {
+    // The session lock is gone; keep this process from running indefinitely
+    // without ownership. Compose can restart it and recover queued jobs.
+    process.exitCode = 1;
+    console.error('PostgreSQL owner connection lost; stopping report API for recovery');
+    void stop();
+  };
+  if (app.service.db.signal.aborted) onDatabaseLost();
+  else app.service.db.signal.addEventListener('abort', onDatabaseLost, { once: true });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 }

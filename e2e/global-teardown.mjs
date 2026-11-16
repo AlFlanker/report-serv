@@ -1,10 +1,12 @@
-import { rm } from 'node:fs/promises';
+import { Pool } from 'pg';
 import { S3Client, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 
 export default async function teardown(config) {
-  const { s3Prefix, databaseDirectory } = config.metadata;
+  const { s3Prefix, databaseSchema } = config.metadata;
   // Only objects inside this run's random namespace can be removed.
   if (!/\/e2e-[a-f0-9-]+\/$/.test(s3Prefix)) throw new Error('Invalid isolated E2E S3 prefix');
+  if (!/^e2e_[a-f0-9]{32}$/.test(databaseSchema)) throw new Error('Invalid isolated E2E PostgreSQL schema');
+  const database = new Pool({ connectionString: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL });
   const client = new S3Client({
     endpoint: process.env.S3_ENDPOINT || undefined,
     region: process.env.S3_REGION || 'us-east-1',
@@ -22,6 +24,9 @@ export default async function teardown(config) {
       }));
       continuation = page.NextContinuationToken;
     } while (continuation);
-    await rm(databaseDirectory, { recursive: true, force: true });
-  } finally { client.destroy(); }
+  } finally {
+    client.destroy();
+    try { await database.query(`DROP SCHEMA IF EXISTS "${databaseSchema}" CASCADE`); }
+    finally { await database.end(); }
+  }
 }

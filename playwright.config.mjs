@@ -1,10 +1,10 @@
 import { defineConfig } from '@playwright/test';
-import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
-const databaseDirectory = mkdtempSync(join(tmpdir(), 'report-serv-e2e-'));
+const databaseSchema = `e2e_${randomUUID().replaceAll('-', '')}`;
+const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('Browser tests require DATABASE_URL; run npm run db:up first.');
 const s3Prefix = `${(process.env.S3_PREFIX || 'reports').replace(/\/+$/, '')}/e2e-${randomUUID()}/`;
 const executablePath = process.env.CHROMIUM_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
 
@@ -16,7 +16,7 @@ export default defineConfig({
   fullyParallel: false,
   reporter: 'list',
   globalTeardown: './e2e/global-teardown.mjs',
-  metadata: { databaseDirectory, s3Prefix },
+  metadata: { databaseSchema, s3Prefix },
   use: {
     baseURL: 'http://127.0.0.1:4310',
     viewport: { width: 1440, height: 960 },
@@ -34,7 +34,8 @@ export default defineConfig({
     env: {
       API_PORT: '4311',
       WEB_PORT: '4310',
-      DB_PATH: join(databaseDirectory, 'reports.sqlite'),
+      DATABASE_URL: databaseUrl,
+      DATABASE_SCHEMA: databaseSchema,
       SEED_DEMO: 'true',
       S3_PREFIX: s3Prefix,
     },

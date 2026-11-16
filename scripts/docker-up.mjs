@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 const cwd = fileURLToPath(new URL('../', import.meta.url));
 for (const [command, args] of [
   [process.execPath, ['scripts/setup-local-s3.mjs']],
+  [process.execPath, ['scripts/setup-local-postgres.mjs']],
   [process.execPath, ['scripts/build-docker.mjs']],
   ['docker', ['compose', '--profile', 'app', 'up', '-d', '--wait', '--no-build']],
 ]) {
